@@ -16,7 +16,7 @@ APPNAME = $(NAME).app
 EXE = $(NAME)
 
 # for consistency with older versions, use a lower case bundle ID
-BUNDLE_IDENTIFIER = org.rephial.angband
+BUNDLE_IDENTIFIER = com.trobichaux.frogcomposband
 
 ARCH = -arch arm64
 WARNINGS = -W -Wall -Wno-unused-parameter -Wno-missing-field-initializers
@@ -49,7 +49,7 @@ endif
 # let Makefile.inc set VERSION and then we'll use the detailed build ID as the bundle version (visible in "About Angband")
 include Makefile.inc
 
-BUNDLE_VERSION := VERSION
+BUNDLE_VERSION := $(VERSION)
 CFLAGS += -DBUILD_ID=${VERSION}
 OBJS = $(BASEOBJS)
 OSX_OBJS = main-cocoa.o cocoa/AngbandFontPicker.o cocoa/AngbandPreferencesWindowController.o
@@ -199,7 +199,6 @@ dist: install
 	mkdir -p disttemp/Docs
 	cp ../readme.txt disttemp/Docs
 	cp -R -p "$(APPBNDL)" disttemp
-	SetFile -a B disttemp/$(APPNAME)
 
 	@-rm ../"$(PACKAGE_NAME)-osx.dmg"
 

@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>$BUNDLE_VERSION$</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © $COPYRIGHT$</string>
+	<string>$COPYRIGHT$</string>
 	<key>NSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>LSApplicationCategoryType</key>
