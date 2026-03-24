@@ -37,19 +37,36 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN_PATH"
 
-      - name: Sign app bundle
+      - name: Sign and package .dmg
         if: startsWith(github.ref, 'refs/tags/')
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          # Sign the app (must happen before packaging into .dmg)
           codesign --deep --force --options runtime \
             --sign "Developer ID Application: TIMOTHY D ROBICHAUX ($APPLE_TEAM_ID)" \
             --entitlements src/cocoa/FrogComposband.entitlements \
             FrogComposband.app
+          codesign --verify --deep --strict FrogComposband.app
 
-      - name: Create .dmg
-        if: startsWith(github.ref, 'refs/tags/')
-        run: cd src && make -f Makefile.osx dist
+          # Get version from Makefile
+          VERSION=$(grep '^VERSION' src/Makefile.src | head -1 | cut -d= -f2 | tr -d ' ')
+          DMG_NAME="FrogComposband-${VERSION}-osx.dmg"
+
+          # Package the already-signed app into a .dmg
+          mkdir -p disttemp/Docs
+          cp readme.txt disttemp/Docs
+          cp -R FrogComposband.app disttemp/
+          hdiutil create -quiet -fs HFS+ -volname "FrogComposband-${VERSION}" \
+            -srcfolder disttemp disttemp.dmg
+          hdiutil convert disttemp.dmg -quiet -format UDZO \
+            -imagekey zlib-level=6 -o "$DMG_NAME"
+          rm -rf disttemp disttemp.dmg
+
+          # Sign the .dmg itself (required for notarization)
+          codesign --force \
+            --sign "Developer ID Application: TIMOTHY D ROBICHAUX ($APPLE_TEAM_ID)" \
+            "$DMG_NAME"
 
       - name: Notarize .dmg
         if: startsWith(github.ref, 'refs/tags/')
