@@ -172,9 +172,52 @@
 
   You cannot specify more than 7 child terminals.
 
+--- macOS (arm64, native Cocoa app)
+
+  Requirements:
+    - Apple Silicon Mac (arm64)
+    - macOS 12.0 (Monterey) or later
+    - Xcode Command Line Tools:
+        $ xcode-select --install
+
+  Clone the repository:
+    $ git clone https://github.com/trobichaux/frogcomposband.git
+    $ cd frogcomposband/src
+
+  Build and install the app bundle:
+    $ make -f Makefile.osx
+
+  This produces FrogComposband.app in the project root directory.
+  Double-click it to play, or move it to /Applications.
+
+  On first launch macOS may show a security warning. To allow it:
+    System Settings > Privacy & Security > Open Anyway
+
+  To create a distributable .dmg:
+    $ make -f Makefile.osx dist
+
+  This produces FrogComposband-<version>-osx.dmg in the project root.
+
+  Notes:
+    - Save files are stored in ~/.angband/FrogComposband/
+    - Preferences (font, window layout) are stored in macOS user defaults
+    - Graphics tiles and sound files, if present in lib/xtra/, are bundled
+      automatically during the build
+
+  Changes from upstream (sulkasormi/frogcomposband):
+    - Rewrote main-cocoa.m for modern macOS: removed legacy Carbon/GC
+      dependencies, fixed rendering artifacts (overdraw cache zero-init,
+      background fill color), and corrected ANGBAND_SYS initialization
+      ordering so arrow-key macros load correctly
+    - Added AngbandFontPicker and AngbandPreferencesWindowController for
+      in-app font and preferences UI
+    - Added FrogComposband app icon
+    - Updated Makefile.osx to target arm64 with deployment target macOS 12.0
+    - Fixed duplicate splash screen display on macOS (matching Windows behavior)
+
 --- Windows
 
-  Download the binary archive for Windows.  Unzip it to any location that you 
+  Download the binary archive for Windows.  Unzip it to any location that you
   will have full permissions and launch frogcomposband to play.
 
   To compile the source code in MinGW:
