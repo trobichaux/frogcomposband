@@ -18,17 +18,17 @@ EXE = $(NAME)
 # for consistency with older versions, use a lower case bundle ID
 BUNDLE_IDENTIFIER = org.rephial.angband
 
-ARCH = -arch i386 -arch x86_64
+ARCH = -arch arm64
 WARNINGS = -W -Wall -Wno-unused-parameter -Wno-missing-field-initializers
 JUST_C = -std=c99 -Wdeclaration-after-statement
-OBJ_CFLAGS = -std=c99 -x objective-c -mmacosx-version-min=10.5
+OBJ_CFLAGS = -std=c99 -x objective-c -mmacosx-version-min=12.0
 CFLAGS = -g -I. $(WARNINGS) $(OPT) -DMACH_O_CARBON -DHAVE_MKSTEMP \
-	-fno-stack-protector $(ARCH)
+	-DSET_UID -fno-stack-protector $(ARCH)
 LIBS = -framework Cocoa
 # Fix for bug #1663: Set the deployment target via environment variable
 # for the final link command. See http://grauonline.de/wordpress/?p=71
 # or http://stackoverflow.com/questions/5509885/creating-app-for-old-mac-from-new-mac-machine
-DEPLOYMENT_TARGET = MACOSX_DEPLOYMENT_TARGET=10.5
+DEPLOYMENT_TARGET = MACOSX_DEPLOYMENT_TARGET=12.0
 
 # Import user prefs
 # If you don't want to edit this file, put your module redefinitions
@@ -52,7 +52,7 @@ include Makefile.inc
 BUNDLE_VERSION := VERSION
 CFLAGS += -DBUILD_ID=${VERSION}
 OBJS = $(BASEOBJS)
-OSX_OBJS = main-cocoa.o
+OSX_OBJS = main-cocoa.o cocoa/AngbandFontPicker.o cocoa/AngbandPreferencesWindowController.o
 
 
 
@@ -62,11 +62,8 @@ OSX_OBJS = main-cocoa.o
 
 
 $(EXE).o: $(OBJS)
-	@printf "%10s %-20s\n" LD $@.x86_64
-	@$(LD) -r -arch x86_64 -o $@.x86_64 $(OBJS)
-	@printf "%10s %-20s\n" LD $@.i386
-	@$(LD) -r -arch i386 -o $@.i386 $(OBJS)
-	lipo -arch x86_64 $@.x86_64 -arch i386 $@.i386 -create -output frogcomposband.o
+	@printf "%10s %-20s\n" LD $@
+	@$(LD) -r -arch arm64 -o $@ $(OBJS)
 
 $(EXE): $(EXE).o $(OSX_OBJS)
 	$(DEPLOYMENT_TARGET) $(CC) $(CFLAGS) $(LDFLAGS) -o $(EXE) $(EXE).o $(OSX_OBJS) $(LIBS) 
@@ -76,7 +73,7 @@ $(EXE): $(EXE).o $(OSX_OBJS)
 #
 
 clean:
-	-rm -f $(OBJS) $(EXE) $(EXE).o.i386 $(EXE).o.x86_64 $(EXE).o $(OSX_OBJS)
+	-rm -f $(OBJS) $(EXE) $(EXE).o $(OSX_OBJS) cocoa/AngbandFontPicker.o cocoa/AngbandPreferencesWindowController.o
 
 
 #
@@ -84,6 +81,14 @@ clean:
 #
 
 main-cocoa.o : main-cocoa.m
+	@printf "%10s %-20s (objective-c)\n" CC $<
+	@$(CC) $(CFLAGS) $(OBJ_CFLAGS) -c -o $@ $<
+
+cocoa/AngbandFontPicker.o : cocoa/AngbandFontPicker.m cocoa/AngbandFontPicker.h
+	@printf "%10s %-20s (objective-c)\n" CC $<
+	@$(CC) $(CFLAGS) $(OBJ_CFLAGS) -c -o $@ $<
+
+cocoa/AngbandPreferencesWindowController.o : cocoa/AngbandPreferencesWindowController.m cocoa/AngbandPreferencesWindowController.h cocoa/AngbandFontPicker.h
 	@printf "%10s %-20s (objective-c)\n" CC $<
 	@$(CC) $(CFLAGS) $(OBJ_CFLAGS) -c -o $@ $<
 %.o : %.c
@@ -118,13 +123,12 @@ APPRES = $(APPCONT)/Resources
 # the lib/xtra/graf directory and rebuild.
 PLIST = cocoa/Angband-Cocoa.xml
 
-ICONFILES = cocoa/Angband_Icons.icns cocoa/Save.icns cocoa/Edit.icns cocoa/Data.icns
+ICONFILES = cocoa/FrogComposband_Icons.icns cocoa/Angband_Icons.icns cocoa/Save.icns cocoa/Edit.icns cocoa/Data.icns
 
 LIBFILES = \
   ../lib/edit/*.txt \
   ../lib/file/*.txt \
   ../lib/help/*.txt \
-  ../lib/help/*.hlp \
   ../lib/pref/*.prf \
 
 install: $(EXE) $(ICONFILES) $(PLIST) $(LIBFILES)
@@ -146,15 +150,12 @@ install: $(EXE) $(ICONFILES) $(PLIST) $(LIBFILES)
 	@echo copying files...
 	@cp ../lib/edit/*.txt $(APPRES)/lib/edit
 	@cp ../lib/file/*.txt $(APPRES)/lib/file
-	@cp ../lib/help/*.txt $(APPRES)/lib/help
-	@cp ../lib/help/*.hlp $(APPRES)/lib/help
+	@cp -r ../lib/help/. $(APPRES)/lib/help
 	@cp ../lib/pref/*.prf $(APPRES)/lib/pref
 
 	# 'optionally' install sound and graphics tiles, if present
-	# TODO: read the tile pngs from $(APPRES)/lib/xtra/graf/
-	# so we can just recursively copy that directory.
 	-cp ../lib/xtra/graf/graphics.txt $(APPRES)/lib/xtra/graf
-	-cp ../lib/xtra/graf/*.png $(APPRES)/
+	-cp ../lib/xtra/graf/*.png $(APPRES)/lib/xtra/graf
 	-cp ../lib/xtra/sound/*.mp3 $(APPRES)/lib/xtra/sound
 	-cp ../lib/xtra/sound/sound.cfg $(APPRES)/lib/xtra/sound
 
@@ -170,7 +171,6 @@ install: $(EXE) $(ICONFILES) $(PLIST) $(LIBFILES)
 		-e 's/\$$BUNDLE_IDENTIFIER\$$/$(BUNDLE_IDENTIFIER)/' \
 		$(PLIST) > $(APPCONT)/Info.plist
 
-	SetFile -a B $(APPBNDL)
 
 
 vars:

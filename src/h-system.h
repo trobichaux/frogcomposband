@@ -64,6 +64,10 @@
 # include <io.h>
 #endif
 
+#if !defined(WINDOWS) && !defined(MSDOS)
+# include <unistd.h>
+#endif
+
 #if !defined(MACINTOSH) && !defined(AMIGA) && \
     !defined(ACORN) && !defined(VM)
 # if defined(__TURBOC__) || defined(__WATCOMC__)

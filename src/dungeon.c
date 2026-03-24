@@ -6073,9 +6073,10 @@ void play_game(bool new_game)
         }
     }
 
-    /* The Windows port blocks until the user chooses a menu for a New game, or
-       to load an existing game. Thus, it will display its own start screen ... */
-    if (strcmp(ANGBAND_SYS, "win") != 0)
+    /* The Windows and Mac/Cocoa ports block until the user chooses a menu for a
+       New game, or to load an existing game, and display their own start screen
+       before that wait. Skip display_news() here for those ports. */
+    if (strcmp(ANGBAND_SYS, "win") != 0 && strcmp(ANGBAND_SYS, "mac") != 0)
     {
         /* On X11, you need to flush() before Term->hgt is accurate! */
         Term_flush();

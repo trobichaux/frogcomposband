@@ -25,12 +25,19 @@
 #endif
 
 /* Mac headers */
+/* The game defines BOOL(E) as !!(E) and bool as bool_hack, both of which
+ * conflict with Cocoa/Foundation type names. Undefine them before including
+ * system headers; Cocoa's own definitions will take over for this file. */
+#undef BOOL
+#undef bool
 #include <Cocoa/Cocoa.h>
-#include <Carbon/Carbon.h> // For keycodes
+#include "cocoa/AngbandKeyCodes.h"           /* kVK_* constants (replaces Carbon) */
+#import  "cocoa/AngbandFontPicker.h"
+#import  "cocoa/AngbandPreferencesWindowController.h"
 
 static NSSize const AngbandScaleIdentity = {1.0, 1.0};
 static NSString * const AngbandDirectoryNameLib = @"lib";
-static NSString * const AngbandDirectoryNameBase = @"PosChengband";
+static NSString * const AngbandDirectoryNameBase = @"FrogComposband";
 
 static NSString * const AngbandTerminalsDefaultsKey = @"Terminals";
 static NSString * const AngbandTerminalRowsDefaultsKey = @"Rows";
@@ -115,16 +122,6 @@ enum
     AngbandEventWakeup = 1
 };
 
-/* Redeclare some 10.7 constants and methods so we can build on 10.6 */
-enum
-{
-    Angband_NSWindowCollectionBehaviorFullScreenPrimary = 1 << 7,
-    Angband_NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8
-};
-
-@interface NSWindow (AngbandLionRedeclares)
-- (void)setRestorable:(BOOL)flag;
-@end
 
 /* Delay handling of pre-emptive "quit" event */
 static BOOL quit_when_ready = FALSE;
@@ -336,8 +333,11 @@ static void AngbandUpdateWindowVisibility(void)
     }
 
     // make the main window key so that user events go to the right spot
-    AngbandContext *mainWindow = angband_term[0]->data;
-    [mainWindow->primaryWindow makeKeyAndOrderFront: nil];
+    if (angband_term[0] && angband_term[0]->data)
+    {
+        AngbandContext *mainWindow = angband_term[0]->data;
+        [mainWindow->primaryWindow makeKeyAndOrderFront: nil];
+    }
 }
 
 /* To indicate that a grid element contains a picture, we store 0xFFFF. */
@@ -433,7 +433,6 @@ static void hook_quit(const char * str);
 static void load_prefs(void);
 static void load_sounds(void);
 static void init_windows(void);
-static void handle_open_when_ready(void);
 //static void play_sound(int event);
 static BOOL check_events(int wait);
 //static void cocoa_file_open_hook(const char *path, file_type ftype);
@@ -543,7 +542,7 @@ static int compare_advances(const void *ap, const void *bp)
     
     // Get advances. Record the max advance.
     CGSize advances[GLYPH_COUNT] = {};
-    CTFontGetAdvancesForGlyphs((CTFontRef)screenFont, kCTFontHorizontalOrientation, glyphArray, advances, GLYPH_COUNT);
+    CTFontGetAdvancesForGlyphs((CTFontRef)screenFont, kCTFontOrientationHorizontal, glyphArray, advances, GLYPH_COUNT);
     for (i=0; i < GLYPH_COUNT; i++) {
         glyphWidths[i] = advances[i].width;
     }
@@ -573,10 +572,19 @@ static int compare_advances(const void *ap, const void *bp)
     tileSize.height = [screenFont ascender] - [screenFont descender];
 }
 
+/* Returns the backing scale factor for our active view, or 1.0 if unknown. */
+- (CGFloat)backingScaleFactor
+{
+    AngbandView *view = [self activeView];
+    if (view && [view window])
+        return [[view window] backingScaleFactor];
+    return 1.0;
+}
+
 - (void)updateImage
 {
     NSSize size = NSMakeSize(1, 1);
-    
+
     AngbandView *activeView = [self activeView];
     if (activeView)
     {
@@ -584,14 +592,18 @@ static int compare_advances(const void *ap, const void *bp)
         NSScreen *screen;
         if ([self useLiveResizeOptimization] && (screen = [[activeView window] screen]) != NULL)
         {
-            size = [screen frame].size;
+            /* Use the screen's backing pixel dimensions for the live-resize buffer. */
+            CGFloat screenScale = [screen backingScaleFactor];
+            NSSize frameSize = [screen frame].size;
+            size = NSMakeSize(frameSize.width * screenScale, frameSize.height * screenScale);
         }
         else
         {
-            size = [activeView bounds].size;
+            /* Convert view bounds from points to backing pixels for the off-screen layer. */
+            size = [activeView convertSizeToBacking:[activeView bounds].size];
         }
     }
-    
+
     size.width = fmax(1, ceil(size.width));
     size.height = fmax(1, ceil(size.height));
     
@@ -685,63 +697,47 @@ static int compare_advances(const void *ap, const void *bp)
 
 - (void)drawWChar:(wchar_t)wchar inRect:(NSRect)tile
 {
-    CGContextRef ctx = [[NSGraphicsContext currentContext] graphicsPort];
-    CGFloat tileOffsetY = CTFontGetAscent( (CTFontRef)[angbandViewFont screenFont] );
-    CGFloat tileOffsetX = 0.0;
+    CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
     NSFont *screenFont = [angbandViewFont screenFont];
     UniChar unicharString[2] = {(UniChar)wchar, 0};
 
-    // Get glyph and advance
-    CGGlyph thisGlyphArray[1] = { 0 };
-    CGSize advances[1] = { { 0, 0 } };
-    CTFontGetGlyphsForCharacters((CTFontRef)screenFont, unicharString, thisGlyphArray, 1);
-    CGGlyph glyph = thisGlyphArray[0];
-    CTFontGetAdvancesForGlyphs((CTFontRef)screenFont, kCTFontHorizontalOrientation, thisGlyphArray, advances, 1);
-    CGSize advance = advances[0];
-    
-    /* If our font is not monospaced, our tile width is deliberately not big enough for every character. In that event, if our glyph is too wide, we need to compress it horizontally. Compute the compression ratio. 1.0 means no compression. */
+    /* Get glyph and advance width. */
+    CGGlyph glyph = 0;
+    CGSize advance = CGSizeZero;
+    CTFontGetGlyphsForCharacters((CTFontRef)screenFont, unicharString, &glyph, 1);
+    CTFontGetAdvancesForGlyphs((CTFontRef)screenFont, kCTFontOrientationHorizontal, &glyph, &advance, 1);
+
+    /* If our font is not monospaced, our tile width may not match the advance.
+     * Center the glyph if there is room, or compress horizontally to fit. */
     double compressionRatio;
+    CGFloat tileOffsetX;
     if (advance.width <= NSWidth(tile))
     {
-        /* Our glyph fits, so we can just draw it, possibly with an offset */
         compressionRatio = 1.0;
-        tileOffsetX = (NSWidth(tile) - advance.width)/2;
+        tileOffsetX = (NSWidth(tile) - advance.width) / 2.0;
     }
     else
     {
-        /* Our glyph doesn't fit, so we'll have to compress it */
         compressionRatio = NSWidth(tile) / advance.width;
         tileOffsetX = 0;
     }
 
-    
-    /* Now draw it */
-    CGAffineTransform textMatrix = CGContextGetTextMatrix(ctx);
-    CGFloat savedA = textMatrix.a;
+    /* Baseline position: tileOffsetY = ascent places the baseline so that
+     * glyphs fill the tile correctly after the y-flip below. */
+    CGFloat tileOffsetY = CTFontGetAscent((CTFontRef)screenFont);
 
-    /* Set the position */
-    textMatrix.tx = tile.origin.x + tileOffsetX;
-    textMatrix.ty = tile.origin.y + tileOffsetY;
-
-    /* Maybe squish it horizontally. */
-    if (compressionRatio != 1.)
-    {
-        textMatrix.a *= compressionRatio;
-    }
-
-    textMatrix = CGAffineTransformScale( textMatrix, 1.0, -1.0 );
-    CGContextSetTextMatrix(ctx, textMatrix);
-    CGContextShowGlyphsWithAdvances(ctx, &glyph, &CGSizeZero, 1);
-    
-    /* Restore the text matrix if we messed with the compression ratio */
-    if (compressionRatio != 1.)
-    {
-        textMatrix.a = savedA;
-        CGContextSetTextMatrix(ctx, textMatrix);
-    }
-
-    textMatrix = CGAffineTransformScale( textMatrix, 1.0, -1.0 );
-    CGContextSetTextMatrix(ctx, textMatrix);
+    /* Draw the glyph via CTFontDrawGlyphs.  We manipulate the CTM to:
+     *  1. Translate to the baseline origin (drawX, drawY).
+     *  2. Flip y (-1) so text appears right-side up when the CGLayer is
+     *     composited into the flipped (y-down) NSView.
+     *  3. Compress horizontally if the glyph is wider than the tile.
+     * CTM save/restore is cleaner than the old CGContextSetTextMatrix dance. */
+    CGContextSaveGState(ctx);
+    CGContextTranslateCTM(ctx, tile.origin.x + tileOffsetX, tile.origin.y + tileOffsetY);
+    CGContextScaleCTM(ctx, compressionRatio, -1.0);
+    CGPoint origin = CGPointZero;
+    CTFontDrawGlyphs((CTFontRef)screenFont, &glyph, &origin, 1, ctx);
+    CGContextRestoreGState(ctx);
 }
 
 /* Indication that we're redrawing everything, so get rid of the overdraw cache. */
@@ -756,7 +752,7 @@ static int compare_advances(const void *ap, const void *bp)
 {
     /* Create an NSGraphicsContext representing this CGLayer */
     CGContextRef ctx = CGLayerGetContext(angbandLayer);
-    NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithGraphicsPort:ctx flipped:NO];
+    NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithCGContext:ctx flipped:NO];
     [NSGraphicsContext saveGraphicsState];
     [NSGraphicsContext setCurrentContext:context];
     CGContextSaveGState(ctx);
@@ -766,7 +762,7 @@ static int compare_advances(const void *ap, const void *bp)
 - (void)unlockFocus
 {
     /* Restore the graphics state */
-    CGContextRef ctx = [[NSGraphicsContext currentContext] graphicsPort];
+    CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
     CGContextRestoreGState(ctx);
     [NSGraphicsContext restoreGraphicsState];
 }
@@ -780,7 +776,13 @@ static int compare_advances(const void *ap, const void *bp)
 
 - (CGContextRef)lockFocus
 {
-    return [self lockFocusUnscaled];
+    CGContextRef ctx = [self lockFocusUnscaled];
+    /* Scale the CTM so that game code drawing in points lands at the correct
+     * backing pixels inside the off-screen layer. */
+    CGFloat scale = [self backingScaleFactor];
+    if (scale != 1.0)
+        CGContextScaleCTM(ctx, scale, scale);
+    return ctx;
 }
 
 
@@ -828,9 +830,9 @@ static int compare_advances(const void *ap, const void *bp)
         /* Default border size */
         self->borderSize = NSMakeSize(2, 2);
 
-        /* Allocate overdraw cache, unscanned and collectable. */
-        self->charOverdrawCache = NSAllocateCollectable(self->cols * self->rows *sizeof *charOverdrawCache, 0);
-        self->attrOverdrawCache = NSAllocateCollectable(self->cols * self->rows *sizeof *attrOverdrawCache, 0);
+        /* Allocate overdraw cache (calloc zeros memory, matching old GC behavior). */
+        self->charOverdrawCache = calloc(self->cols * self->rows, sizeof *charOverdrawCache);
+        self->attrOverdrawCache = calloc(self->cols * self->rows, sizeof *attrOverdrawCache);
         
         /* Allocate our array of views */
         angbandViews = [[NSMutableArray alloc] init];
@@ -865,10 +867,10 @@ static int compare_advances(const void *ap, const void *bp)
     [primaryWindow release];
     primaryWindow = nil;
     
-    /* Free overdraw cache (unless we're GC, in which case it was allocated collectable) */
-    if (! [NSGarbageCollector defaultCollector]) free(self->charOverdrawCache);
+    /* Free overdraw cache. */
+    free(self->charOverdrawCache);
     self->charOverdrawCache = NULL;
-    if (! [NSGarbageCollector defaultCollector]) free(self->attrOverdrawCache);
+    free(self->attrOverdrawCache);
     self->attrOverdrawCache = NULL;
 }
 
@@ -896,7 +898,12 @@ static int compare_advances(const void *ap, const void *bp)
     if( !libExists || !isDirectory )
     {
         NSLog( @"[%@ %@]: can't find %@/ in bundle: isDirectory: %d libExists: %d", NSStringFromClass( [self class] ), NSStringFromSelector( _cmd ), AngbandDirectoryNameLib, isDirectory, libExists );
-        NSRunAlertPanel( @"Missing Resources", @"PosChengband was unable to find required resources and must quit. Please report a bug on the Angband forums.", @"Quit", nil, nil );
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:@"Missing Resources"];
+        [alert setInformativeText:@"FrogComposband was unable to find required resources and must quit. Please report a bug on the GitHub issue tracker."];
+        [alert addButtonWithTitle:@"Quit"];
+        [alert runModal];
+        [alert release];
         exit( 0 );
     }
 
@@ -964,17 +971,16 @@ static int compare_advances(const void *ap, const void *bp)
 	/* Register the sound hook */
 	//sound_hook = play_sound;
     
+    /* Note the "system" -- must be set BEFORE init_angband() so that
+     * pref.prf's conditional [EQU $SYS mac] loads pref-mac.prf, which
+     * registers the macro trigger template and arrow-key macros. */
+    ANGBAND_SYS = "mac";
+
     /* Initialize */
     init_angband();
-
-    /* Note the "system" */
-    ANGBAND_SYS = "mac";
     
     /* Initialize some save file stuff */
     player_egid = getegid();
-    
-    /* Handle "open_when_ready" */
-    //handle_open_when_ready();
     
     /* Handle pending events (most notably update) and flush input */
     Term_flush();
@@ -986,9 +992,14 @@ static int compare_advances(const void *ap, const void *bp)
         
     [pool drain];
     
+    /* Show the splash/news screen before waiting for menu selection.
+     * dungeon.c skips display_news() for "mac" (like "win") so it
+     * doesn't show a second time after the user picks New or Open. */
+    display_news();
+
     /* Wait for response */
     prt("[Choose 'New' or 'Open' from the 'File' menu]", 23, 17);
-    while (!game_in_progress) (check_events(CHECK_EVENTS_WAIT)); 
+    while (!game_in_progress) (check_events(CHECK_EVENTS_WAIT));
 
     /* Play the game */
     play_game(new_game);
@@ -996,9 +1007,6 @@ static int compare_advances(const void *ap, const void *bp)
 
 + (void)endGame
 {    
-    /* Hack -- Forget messages */
-    msg_flag = FALSE;
-    
     p_ptr->playing = FALSE;
     p_ptr->leaving = TRUE;
     quit_when_ready = TRUE;
@@ -1113,12 +1121,12 @@ static NSMenuItem *superitem(NSMenuItem *self)
         CGFloat height = self->rows * tileSize.height + borderSize.height * 2.0;
         NSRect contentRect = NSMakeRect( 0.0, 0.0, width, height );
 
-        NSUInteger styleMask = NSTitledWindowMask | NSResizableWindowMask | NSMiniaturizableWindowMask;
+        NSUInteger styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable;
 
         // make every window other than the main window closable
         if( angband_term[0]->data != self )
         {
-            styleMask |= NSClosableWindowMask;
+            styleMask |= NSWindowStyleMaskClosable;
         }
 
         primaryWindow = [[NSWindow alloc] initWithContentRect:contentRect styleMask: styleMask backing:NSBackingStoreBuffered defer:YES];
@@ -1155,7 +1163,7 @@ static NSMenuItem *superitem(NSMenuItem *self)
     if (! viewInLiveResize) [self throttle];
 
     /* With a GLayer, use CGContextDrawLayerInRect */
-    CGContextRef context = [[NSGraphicsContext currentContext] graphicsPort];
+    CGContextRef context = [[NSGraphicsContext currentContext] CGContext];
     NSRect bounds = [view bounds];
     if (viewInLiveResize) CGContextSetInterpolationQuality(context, kCGInterpolationLow);
     CGContextSetBlendMode(context, kCGBlendModeCopy);
@@ -1207,15 +1215,14 @@ static NSMenuItem *superitem(NSMenuItem *self)
 
 - (void)resizeOverdrawCache
 {
-    /* Free overdraw cache (unless we're GC, in which case it was allocated collectable) */
-    if (! [NSGarbageCollector defaultCollector]) free(self->charOverdrawCache);
+    /* Free and reallocate overdraw cache at new dimensions. */
+    free(self->charOverdrawCache);
     self->charOverdrawCache = NULL;
-    if (! [NSGarbageCollector defaultCollector]) free(self->attrOverdrawCache);
+    free(self->attrOverdrawCache);
     self->attrOverdrawCache = NULL;
 
-    /* Allocate overdraw cache, unscanned and collectable. */
-    self->charOverdrawCache = NSAllocateCollectable(self->cols * self->rows *sizeof *charOverdrawCache, 0);
-    self->attrOverdrawCache = NSAllocateCollectable(self->cols * self->rows *sizeof *attrOverdrawCache, 0);
+    self->charOverdrawCache = calloc(self->cols * self->rows, sizeof *charOverdrawCache);
+    self->attrOverdrawCache = calloc(self->cols * self->rows, sizeof *attrOverdrawCache);
 }
 
 - (void)resizeTerminalWithContentRect: (NSRect)contentRect saveToDefaults: (BOOL)saveToDefaults
@@ -1315,7 +1322,7 @@ static NSMenuItem *superitem(NSMenuItem *self)
     }
 
     NSMenuItem *item = [[[NSApplication sharedApplication] windowsMenu] itemWithTag: AngbandWindowMenuItemTagBase + termIndex];
-    [item setState: NSOnState];
+    [item setState: NSControlStateValueOn];
 
     if( [[NSFontPanel sharedFontPanel] isVisible] )
     {
@@ -1343,7 +1350,30 @@ static NSMenuItem *superitem(NSMenuItem *self)
     }
 
     NSMenuItem *item = [[[NSApplication sharedApplication] windowsMenu] itemWithTag: AngbandWindowMenuItemTagBase + termIndex];
-    [item setState: NSOffState];
+    [item setState: NSControlStateValueOff];
+}
+
+/* Called when any of our windows is about to close. For subwindows this resets
+ * hasSubwindowFlags so that AngbandUpdateWindowVisibility() sees the NO→YES
+ * transition on the next event and re-shows the window if its flags are still
+ * set. Without this, closing a subwindow would permanently suppress it for the
+ * rest of the session. */
+- (void)windowWillClose:(NSNotification *)notification
+{
+    /* Only act on subwindows; the main window closing terminates the app. */
+    if ([notification object] != primaryWindow) return;
+    if (self == (AngbandContext *)angband_term[0]->data) return;
+
+    self.hasSubwindowFlags = NO;
+}
+
+/* Rebuild the off-screen layer at the correct pixel density when the window
+ * moves to a screen with a different backing scale factor (e.g. Retina ↔ 1x). */
+- (void)windowDidChangeBackingProperties:(NSNotification *)notification
+{
+    [self updateImage];
+    [self setNeedsDisplay:YES];
+    [self requestRedraw];
 }
 
 @end
@@ -1424,7 +1454,7 @@ static void set_color_for_index(int idx)
     gv = angband_color_table[idx][2];
     bv = angband_color_table[idx][3];
     
-    CGContextSetRGBFillColor([[NSGraphicsContext currentContext] graphicsPort], rv/255., gv/255., bv/255., 1.);
+    CGContextSetRGBFillColor([[NSGraphicsContext currentContext] CGContext], rv/255., gv/255., bv/255., 1.);
 }
 
 /* Remember the current character in UserDefaults so we can select it by default next time. */
@@ -1459,8 +1489,6 @@ static void Term_init_cocoa(term *t)
     /* Handle graphics */
     t->higher_pict = !! use_graphics;
     t->always_pict = FALSE;
-    
-    NSDisableScreenUpdates();
     
     /* Figure out the frame autosave name based on the index of this term */
     NSString *autosaveName = nil;
@@ -1504,7 +1532,7 @@ static void Term_init_cocoa(term *t)
     /* Set its title and, for auxiliary terms, tentative size */
     if (termIdx == 0)
     {
-        [window setTitle:@"PosChengband"];
+        [window setTitle:@"FrogComposband"];
     }
     else
     {
@@ -1512,19 +1540,15 @@ static void Term_init_cocoa(term *t)
     }
     
     
-    /* If this is the first term, and we support full screen (Mac OS X Lion or later), then allow it to go full screen (sweet). Allow other terms to be FullScreenAuxilliary, so they can at least show up. Unfortunately in Lion they don't get brought to the full screen space; but they would only make sense on multiple displays anyways so it's not a big loss. */
-    if ([window respondsToSelector:@selector(toggleFullScreen:)])
+    /* Allow the main window to go full screen; subwindows appear as auxiliaries. */
     {
         NSWindowCollectionBehavior behavior = [window collectionBehavior];
-        behavior |= (termIdx == 0 ? Angband_NSWindowCollectionBehaviorFullScreenPrimary : Angband_NSWindowCollectionBehaviorFullScreenAuxiliary);
+        behavior |= (termIdx == 0 ? NSWindowCollectionBehaviorFullScreenPrimary : NSWindowCollectionBehaviorFullScreenAuxiliary);
         [window setCollectionBehavior:behavior];
     }
-    
-    /* No Resume support yet, though it would not be hard to add */
-    if ([window respondsToSelector:@selector(setRestorable:)])
-    {
-        [window setRestorable:NO];
-    }
+
+    /* No Resume support yet */
+    [window setRestorable:NO];
     
     /* Position the window, either through autosave or cascading it */
     [window center];
@@ -1541,8 +1565,6 @@ static void Term_init_cocoa(term *t)
     
     /* Only order front if it's the first term. Other terms will be ordered front from update_term_visibility(). This is to work around a problem where Angband aggressively tells us to initialize terms that don't do anything! */
     if (t == angband_term[0]) [context orderFront];
-    
-    NSEnableScreenUpdates();
     
     /* Set "mapped" flag */
     t->mapped_flag = true;
@@ -1778,7 +1800,7 @@ static errr Term_xtra_cocoa(int n, int v)
             [angbandContext lockFocus];
             [[NSColor blackColor] set];
             NSRect imageRect = {NSZeroPoint, [angbandContext imageSize]};            
-            NSRectFillUsingOperation(imageRect, NSCompositeCopy);
+            NSRectFillUsingOperation(imageRect, NSCompositingOperationCopy);
             [angbandContext unlockFocus];
             [angbandContext clearOverdrawCache];
             [angbandContext setNeedsDisplay:YES];
@@ -1875,8 +1897,14 @@ static errr Term_wipe_cocoa(int x, int y, int n)
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
     AngbandContext *angbandContext = Term->data;
     
-    /* clear our overdraw cache for subpixel rendering */
-    [angbandContext clearOverdrawCache];
+    /* Clear only the wiped region from the overdraw cache.
+     * Clearing the entire cache here causes adjacent drawn characters to be
+     * erased by the overdraw mechanism without being redrawn (since their
+     * cache entries read as 0 instead of their actual character). */
+    for (int i = 0; i < n; i++) {
+        angbandContext->charOverdrawCache[y * angbandContext->cols + x + i] = 0;
+        angbandContext->attrOverdrawCache[y * angbandContext->cols + x + i] = 0;
+    }
     
     /* Erase the block of characters */
     NSRect rect = [angbandContext rectInImageForTileAtX:x Y:y];
@@ -1903,7 +1931,7 @@ static void draw_image_tile(CGImageRef image, NSRect srcRect, NSRect dstRect, NS
     CGImageRef subimage = CGImageCreateWithImageInRect(image, *(CGRect *)&srcRect);
     NSGraphicsContext *context = [NSGraphicsContext currentContext];
     [context setCompositingOperation:op];
-    CGContextDrawImage([context graphicsPort], *(CGRect *)&dstRect, subimage);
+    CGContextDrawImage([context CGContext], *(CGRect *)&dstRect, subimage);
     CGImageRelease(subimage);
 }
 
@@ -1978,12 +2006,12 @@ static errr Term_pict_cocoa(int x, int y, int n, const int *ap,
             //if (current_graphics_mode->alphablend)
             if (graf_width > 8 || graf_height > 8)
             {
-                draw_image_tile(pict_image, terrainRect, destinationRect, NSCompositeCopy);
+                draw_image_tile(pict_image, terrainRect, destinationRect, NSCompositingOperationCopy);
                 draw_image_tile(pict_image, sourceRect, destinationRect, NSCompositeSourceOver); 
             }
             else
             {
-                draw_image_tile(pict_image, sourceRect, destinationRect, NSCompositeCopy);
+                draw_image_tile(pict_image, sourceRect, destinationRect, NSCompositingOperationCopy);
             }
         }        
     }
@@ -2039,19 +2067,8 @@ static errr Term_text_cocoa(int x, int y, int n, byte_hack a, cptr cp)
     unsigned rightPushOptions = push_options(x + n - 1, y);
     leftPushOptions &= ~ PUSH_RIGHT;
     rightPushOptions &= ~ PUSH_LEFT;
-#if 0    
-    switch (a / MAX_COLORS) {
-    case BG_BLACK:
-	    [[NSColor blackColor] set];
-	    break;
-    case BG_SAME:
-	    set_color_for_index(a % MAX_COLORS);
-	    break;
-    case BG_DARK:
-	    set_color_for_index(TERM_SHADE);
-	    break;
-    }
-#endif    
+    /* Background is always black (byte attribute a is 0-255, a/MAX_COLORS==0 always). */
+    [[NSColor blackColor] set];
     NSRect rectToClear = charRect;
     rectToClear.size.width = tileWidth * n;
     NSRectFill(crack_rect(rectToClear, AngbandScaleIdentity, leftPushOptions | rightPushOptions));
@@ -2075,20 +2092,8 @@ static errr Term_text_cocoa(int x, int y, int n, byte_hack a, cptr cp)
             {
                 NSRect overdrawRect = [angbandContext rectInImageForTileAtX:overdrawX Y:y];
                 NSRect expandedRect = crack_rect(overdrawRect, AngbandScaleIdentity, push_options(overdrawX, y));
-#if 0                
-                // Make sure we redisplay it
-		switch (previouslyDrawnAttr / MAX_COLORS) {
-		case BG_BLACK:
-		    [[NSColor blackColor] set];
-		    break;
-		case BG_SAME:
-		    set_color_for_index(previouslyDrawnAttr % MAX_COLORS);
-		    break;
-		case BG_DARK:
-		    set_color_for_index(TERM_SHADE);
-		    break;
-		}
-#endif
+                /* Background is always black (same reasoning as primary fill above). */
+                [[NSColor blackColor] set];
                 NSRectFill(expandedRect);
                 redisplayRect = NSUnionRect(redisplayRect, expandedRect);
                 
@@ -2182,7 +2187,7 @@ static size_t Term_mbcs_cocoa(wchar_t *dest, const char *src, int n)
 static void wakeup_event_loop(void)
 {
     /* Big hack - send a nonsense event to make us update */
-    NSEvent *event = [NSEvent otherEventWithType:NSApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:NULL subtype:AngbandEventWakeup data1:0 data2:0];
+    NSEvent *event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:NULL subtype:AngbandEventWakeup data1:0 data2:0];
     [NSApp postEvent:event atStart:NO];
 }
 
@@ -2549,31 +2554,13 @@ static errr cocoa_get_cmd(cmd_context context, bool wait)
         return textui_get_cmd(context, wait);
 }
 #endif
-/* Return the directory into which we put data (save and config) */
+/* Return the directory into which we put data (save and config).
+ * Must match angbandDocumentsPath so the Open dialog starts where saves actually are. */
 static NSString *get_data_directory(void)
 {
-    return [@"~/Documents/PosChengband/" stringByExpandingTildeInPath];
+    NSString *documents = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject];
+    return [documents stringByAppendingPathComponent:AngbandDirectoryNameBase];
 }
-
-/*
- * Handle the "open_when_ready" flag
- */
-static void handle_open_when_ready(void)
-{
-    /* Check the flag XXX XXX XXX make a function for this */
-    if (open_when_ready && initialized && !game_in_progress)
-    {
-        /* Forget */
-        open_when_ready = FALSE;
-        
-        /* Game is in progress */
-        game_in_progress = TRUE;
-        
-        /* Wait for a keypress */
-        pause_line(23);
-    }
-}
-
 
 /*
  * Handle quit_when_ready, by Peter Ammon,
@@ -2587,9 +2574,6 @@ static void quit_calmly(void)
     /* Save the game and Quit (if it's safe) */
     if (inkey_flag)
     {
-        /* Hack -- Forget messages */
-        msg_flag = FALSE;
-        
         /* Save the game */
         do_cmd_save_game(FALSE);
         record_current_savefile();
@@ -2628,15 +2612,15 @@ static BOOL send_event(NSEvent *event)
     /* Analyze the event */
     switch ([event type])
     {
-        case NSKeyDown:
+        case NSEventTypeKeyDown:
         {
             /* Try performing a key equivalent */
             if ([[NSApp mainMenu] performKeyEquivalent:event]) break;
             
             unsigned modifiers = [event modifierFlags];
             
-            /* Send all NSCommandKeyMasks through */
-            if (modifiers & NSCommandKeyMask)
+            /* Send all NSEventModifierFlagCommands through */
+            if (modifiers & NSEventModifierFlagCommand)
             {
                 [NSApp sendEvent:event];
                 break;
@@ -2646,50 +2630,56 @@ static BOOL send_event(NSEvent *event)
             
             
             /* Extract some modifiers */
-            //int mc = !! (modifiers & NSControlKeyMask);
-            //int ms = !! (modifiers & NSShiftKeyMask);
-            //int mo = !! (modifiers & NSAlternateKeyMask);
-            //int mx = !! (modifiers & NSCommandKeyMask);
-            int kp = !! (modifiers & NSNumericPadKeyMask);
+            int mc = !! (modifiers & NSEventModifierFlagControl);
+            int ms = !! (modifiers & NSEventModifierFlagShift);
+            int mo = !! (modifiers & NSEventModifierFlagOption);
+            int mx = !! (modifiers & NSEventModifierFlagCommand);
+            int kp = !! (modifiers & NSEventModifierFlagNumericPad);
             
             
             /* Get the Angband char corresponding to this unichar */
             unichar c = [[event characters] characterAtIndex:0];
-            char ch;
+            char ch = '\0';
+            /* trigger_keycode >= 0 means send a pref-mac.prf trigger sequence
+             * instead of a single char.  The keycodes match the T: entries in
+             * pref-mac.prf (T:Up:62, T:Down:61, T:Left:59, T:Right:60, etc.).
+             * Format sent: 0x1F [C][S][O][X] <keycode_decimal_digits> \r  */
+            int trigger_keycode = -1;
             switch (c) {
-                /* Note that NSNumericPadKeyMask is set if any of the arrow
-                 * keys are pressed. We don't want KC_MOD_KEYPAD set for
-                 * those. See #1662 for more details. */
-                case NSUpArrowFunctionKey: ch = ARROW_UP; kp = 0; break;
-                case NSDownArrowFunctionKey: ch = ARROW_DOWN; kp = 0; break;
-                case NSLeftArrowFunctionKey: ch = ARROW_LEFT; kp = 0; break;
-                case NSRightArrowFunctionKey: ch = ARROW_RIGHT; kp = 0; break;
-                case NSF1FunctionKey: ch = KC_F1; break;
-                case NSF2FunctionKey: ch = KC_F2; break;
-                case NSF3FunctionKey: ch = KC_F3; break;
-                case NSF4FunctionKey: ch = KC_F4; break;
-                case NSF5FunctionKey: ch = KC_F5; break;
-                case NSF6FunctionKey: ch = KC_F6; break;
-                case NSF7FunctionKey: ch = KC_F7; break;
-                case NSF8FunctionKey: ch = KC_F8; break;
-                case NSF9FunctionKey: ch = KC_F9; break;
-                case NSF10FunctionKey: ch = KC_F10; break;
-                case NSF11FunctionKey: ch = KC_F11; break;
-                case NSF12FunctionKey: ch = KC_F12; break;
-                case NSF13FunctionKey: ch = KC_F13; break;
-                case NSF14FunctionKey: ch = KC_F14; break;
-                case NSF15FunctionKey: ch = KC_F15; break;
-                case NSHelpFunctionKey: ch = KC_HELP; break;
-                case NSHomeFunctionKey: ch = KC_HOME; break;
-                case NSPageUpFunctionKey: ch = KC_PGUP; break;
-                case NSPageDownFunctionKey: ch = KC_PGDOWN; break;
-                case NSBeginFunctionKey: ch = KC_BEGIN; break;
-                case NSEndFunctionKey: ch = KC_END; break;
-                case NSInsertFunctionKey: ch = KC_INSERT; break;
-                case NSDeleteFunctionKey: ch = KC_DELETE; break;
-                case NSPauseFunctionKey: ch = KC_PAUSE; break;
-                case NSBreakFunctionKey: ch = KC_BREAK; break;
-                    
+                /* Arrow keys — send pref-mac.prf trigger sequences so inkey_special()
+                 * can decode them to SKEY_UP/DOWN/LEFT/RIGHT for menu navigation.
+                 * The macro system matches e.g. {0x1F,'6','2','\r'} (pattern ^_62\r),
+                 * then ascii_to_text+trigger_ascii_to_text converts to "\[Up]" which
+                 * inkey_special() maps to SKEY_UP via _x11_special_keys["Up]"].
+                 * NSEventModifierFlagNumericPad is also set for arrows; clear kp. */
+                case NSUpArrowFunctionKey:    trigger_keycode = 62; kp = 0; break;
+                case NSDownArrowFunctionKey:  trigger_keycode = 61; kp = 0; break;
+                case NSLeftArrowFunctionKey:  trigger_keycode = 59; kp = 0; break;
+                case NSRightArrowFunctionKey: trigger_keycode = 60; kp = 0; break;
+                /* F-keys (keycodes from T: entries in pref-mac.prf) */
+                case NSF1FunctionKey:  trigger_keycode = 58; break;
+                case NSF2FunctionKey:  trigger_keycode = 56; break;
+                case NSF3FunctionKey:  trigger_keycode = 35; break;
+                case NSF4FunctionKey:  trigger_keycode = 54; break;
+                case NSF5FunctionKey:  trigger_keycode = 32; break;
+                case NSF6FunctionKey:  trigger_keycode = 33; break;
+                case NSF7FunctionKey:  trigger_keycode = 34; break;
+                case NSF8FunctionKey:  trigger_keycode = 36; break;
+                case NSF9FunctionKey:  trigger_keycode = 37; break;
+                case NSF10FunctionKey: trigger_keycode = 45; break;
+                case NSF11FunctionKey: trigger_keycode = 39; break;
+                case NSF12FunctionKey: trigger_keycode = 47; break;
+                case NSF13FunctionKey: trigger_keycode = 41; break;
+                case NSF14FunctionKey: trigger_keycode = 43; break;
+                case NSF15FunctionKey: trigger_keycode = 49; break;
+                /* Navigation keys */
+                case NSHelpFunctionKey:     trigger_keycode = 50; break;
+                case NSHomeFunctionKey:     trigger_keycode = 51; break;
+                case NSPageUpFunctionKey:   trigger_keycode = 52; break;
+                case NSDeleteFunctionKey:   trigger_keycode = 53; break;
+                case NSEndFunctionKey:      trigger_keycode = 55; break;
+                case NSPageDownFunctionKey: trigger_keycode = 57; break;
+
                 default:
                     if (c <= 0x7F)
                         ch = (char)c;
@@ -2698,22 +2688,47 @@ static BOOL send_event(NSEvent *event)
                     break;
             }
             
-            /* override special keys */
+            /* Override special keys with the ASCII values the game expects.
+             * The KC_* constants (0x9c etc.) are only meaningful in the
+             * KC_MOD_ALT encoding path, which is not compiled in this build.
+             * The default: branch above already captures these from
+             * [event characters], but the keyCode switch is more reliable
+             * for keys like Delete whose character value varies by context. */
             switch([event keyCode]) {
-                case kVK_Return: ch = KC_ENTER; break;
-                case kVK_Escape: ch = ESCAPE; break;
-                case kVK_Tab: ch = KC_TAB; break;
-                case kVK_Delete: ch = KC_BACKSPACE; break;
-                case kVK_ANSI_KeypadEnter: ch = KC_ENTER; kp = TRUE; break;
+                case kVK_Return:          ch = '\r';    break;
+                case kVK_Escape:          ch = ESCAPE;  break;
+                case kVK_Tab:             ch = '\t';    break;
+                case kVK_Delete:          ch = '\b';    break;
+                case kVK_ANSI_KeypadEnter: ch = '\r'; kp = TRUE; break;
             }
 
             /* Hide the mouse pointer */
             [NSCursor setHiddenUntilMouseMoves:YES];
-            
+
+#ifndef KC_MOD_ALT
+            /* kp (keypad flag) is only used in the KC_MOD_ALT path */
+            (void)kp;
+#endif
+
             /* Enqueue it */
-            if (ch != '\0')
+            if (trigger_keycode >= 0)
             {
-                
+                /* Send a pref-mac.prf trigger sequence so the macro system
+                 * can match it.  Format: ^_ [modifier_chars] keycode_digits \r
+                 * Modifier chars are C(ontrol) S(hift) O(ption) X(command),
+                 * matching the T:&#:CSOX template in pref-mac.prf. */
+                Term_keypress(0x1F); /* ^_ trigger prefix */
+                if (mc) Term_keypress('C');
+                if (ms) Term_keypress('S');
+                if (mo) Term_keypress('O');
+                if (mx) Term_keypress('X');
+                if (trigger_keycode >= 10)
+                    Term_keypress('0' + trigger_keycode / 10);
+                Term_keypress('0' + trigger_keycode % 10);
+                Term_keypress('\r');
+            }
+            else if (ch != '\0')
+            {
                 /* Enqueue the keypress */
 #ifdef KC_MOD_ALT
                 byte mods = 0;
@@ -2731,7 +2746,7 @@ static BOOL send_event(NSEvent *event)
             break;
         }
             
-        case NSLeftMouseDown:
+        case NSEventTypeLeftMouseDown:
         {
             /* Queue mouse presses if they occur in the map section
              * of the main window.
@@ -2776,7 +2791,7 @@ static BOOL send_event(NSEvent *event)
             break;
         }
 
-        case NSApplicationDefined:
+        case NSEventTypeApplicationDefined:
         {
             if ([event subtype] == AngbandEventWakeup)
             {
@@ -2843,7 +2858,12 @@ static void hook_plog(const char * str)
     if (str)
     {
         NSString *string = [NSString stringWithCString:str encoding:NSMacOSRomanStringEncoding];
-        NSRunAlertPanel(@"Danger Will Robinson", @"%@", @"OK", nil, nil, string);
+        NSAlert *alert = [[NSAlert alloc] init];
+        [alert setMessageText:@"Danger Will Robinson"];
+        [alert setInformativeText:string];
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+        [alert release];
     }
 }
 
@@ -2883,7 +2903,10 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     NSString *directory = [NSString stringWithCString:ANGBAND_DIR_USER encoding:NSASCIIStringEncoding];
     NSString *filename = [NSString stringWithCString:suggested_name encoding:NSASCIIStringEncoding];
 
-    if ([panel runModalForDirectory:directory file:filename] == NSOKButton) {
+    [panel setDirectoryURL:[NSURL fileURLWithPath:directory]];
+    [panel setNameFieldStringValue:filename];
+
+    if ([panel runModal] == NSModalResponseOK) {
         const char *p = [[[panel URL] path] UTF8String];
         my_strcpy(path, p, len);
         return TRUE;
@@ -2904,7 +2927,8 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
 @property (nonatomic, retain) NSDictionary *commandMenuTagMap;
 
 - (IBAction)newGame:sender;
-- (IBAction)editFont:sender;
+- (IBAction)editFont:(id)sender;
+- (IBAction)showPreferencesPanel:(id)sender;
 - (IBAction)openGame:sender;
 
 - (IBAction)selectWindow: (id)sender;
@@ -2923,115 +2947,148 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     new_game = TRUE;
 }
 
-- (IBAction)editFont:sender
+/* Apply a font choice to the main terminal and persist it. */
+- (void)applyFont:(NSFont *)newFont toTermIndex:(int)termIdx
 {
-    NSFontPanel *panel = [NSFontPanel sharedFontPanel];
-    NSFont *termFont = default_font;
+    if (!newFont) return;
 
-    int i;
-    for (i=0; i < ANGBAND_TERM_MAX; i++) {
-        if ([(id)angband_term[i]->data isMainWindow]) {
-            termFont = [(id)angband_term[i]->data selectionFont];
-            break;
-        }
-    }
-    
-    [panel setPanelFont:termFont isMultiple:NO];
-    [panel orderFront:self];
-}
-
-- (void)changeFont:(id)sender
-{
-    int mainTerm;
-    for (mainTerm=0; mainTerm < ANGBAND_TERM_MAX; mainTerm++) {
-        if ([(id)angband_term[mainTerm]->data isMainWindow]) {
-            break;
-        }
-    }
-
-    /* Bug #1709: Only change font for angband windows */
-    if (mainTerm == ANGBAND_TERM_MAX) return;
-    
-    NSFont *oldFont = default_font;
-    NSFont *newFont = [sender convertFont:oldFont];
-    if (! newFont) return; //paranoia
-    
-    /* Store as the default font if we changed the first term */
-    if (mainTerm == 0) {
+    /* Update default_font if this is the primary terminal */
+    if (termIdx == 0) {
         [newFont retain];
         [default_font release];
         default_font = newFont;
     }
-    
-    /* Record it in the preferences */
+
+    /* Persist to UserDefaults */
     NSUserDefaults *defs = [NSUserDefaults angbandDefaults];
-    [defs setValue:[newFont fontName] 
-        forKey:[NSString stringWithFormat:@"FontName-%d", mainTerm]];
+    [defs setValue:[newFont fontName]
+            forKey:[NSString stringWithFormat:@"FontName-%d", termIdx]];
     [defs setFloat:[newFont pointSize]
-        forKey:[NSString stringWithFormat:@"FontSize-%d", mainTerm]];
+            forKey:[NSString stringWithFormat:@"FontSize-%d", termIdx]];
     [defs synchronize];
-    
-    NSDisableScreenUpdates();
-    
-    /* Update window */
-    AngbandContext *angbandContext = angband_term[mainTerm]->data;
-    [(id)angbandContext setSelectionFont:newFont adjustTerminal: YES];
-    
-    NSEnableScreenUpdates();
+
+    /* Apply to the context (resizes terminal to fit) */
+    AngbandContext *ctx = (AngbandContext *)angband_term[termIdx]->data;
+    [(id)ctx setSelectionFont:newFont adjustTerminal:YES];
+
+    /* Keep the Preferences panel in sync */
+    if (termIdx == 0) {
+        [[AngbandPreferencesWindowController sharedPreferences]
+            setDisplayedFont:newFont];
+    }
+}
+
+/* "Edit Font…" menu action — opens the custom monospace font picker sheet. */
+- (IBAction)editFont:(id __unused)sender
+{
+    /* Find the main Angband window to attach the sheet to */
+    NSWindow *parentWindow = nil;
+    int mainTerm = 0;
+    for (int i = 0; i < ANGBAND_TERM_MAX; i++) {
+        if ([(id)angband_term[i]->data isMainWindow]) {
+            parentWindow = ((AngbandContext *)angband_term[i]->data)->primaryWindow;
+            mainTerm = i;
+            break;
+        }
+    }
+    if (!parentWindow) return;
+
+    NSFont *current = [(id)angband_term[mainTerm]->data selectionFont]
+                      ?: default_font;
+    const int capturedTerm = mainTerm;
+
+    [AngbandFontPicker
+        presentAsSheetOnWindow:parentWindow
+                   initialFont:current
+             completionHandler:^(NSFont *chosen) {
+        if (chosen) [self applyFont:chosen toTermIndex:capturedTerm];
+    }];
+}
+
+/* "Preferences…" (Cmd-,) action */
+- (IBAction)showPreferencesPanel:(id __unused)sender
+{
+    AngbandPreferencesWindowController *prefs =
+        [AngbandPreferencesWindowController sharedPreferences];
+
+    /* Wire callbacks the first time (idempotent; blocks are cheap to copy) */
+    [prefs setFontChangeHandler:^(NSFont *font) {
+        [self applyFont:font toTermIndex:0];
+    }];
+    [prefs setResizeHandler:^(NSInteger cols, NSInteger rows) {
+        /* Resize the main terminal to the requested column × row count */
+        AngbandContext *ctx = (AngbandContext *)angband_term[0]->data;
+        NSSize tile = ctx->tileSize;
+        NSSize border = ctx->borderSize;
+        NSSize contentSize = NSMakeSize(cols * tile.width  + border.width  * 2.0,
+                                        rows * tile.height + border.height * 2.0);
+        [ctx->primaryWindow setContentSize:contentSize];
+        NSRect contentRect = [ctx->primaryWindow
+            contentRectForFrameRect:[ctx->primaryWindow frame]];
+        [(id)ctx resizeTerminalWithContentRect:contentRect saveToDefaults:YES];
+    }];
+
+    [[prefs window] center];
+    [prefs showWindow:self];
+}
+
+/* Platform-specific save-file open dialog.
+ * Returns the chosen file path, or nil if the user cancelled.
+ *
+ * On macOS this uses NSOpenPanel.
+ * On iOS/iPadOS this stub returns nil; a UIDocumentPickerViewController
+ * implementation should be added in main-uikit.m instead. */
+static NSString *angband_open_file_dialog(NSString *startingDirectory)
+{
+#if TARGET_OS_OSX
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    [panel setCanChooseFiles:YES];
+    [panel setCanChooseDirectories:NO];
+    [panel setResolvesAliases:YES];
+    [panel setAllowsMultipleSelection:NO];
+    [panel setTreatsFilePackagesAsDirectories:YES];
+    [panel setDirectoryURL:[NSURL fileURLWithPath:startingDirectory]];
+
+    if ([panel runModal] == NSModalResponseOK) {
+        return [[panel URL] path];
+    }
+    return nil;
+#else
+    /* TODO (iOS): present UIDocumentPickerViewController and return the path */
+    (void)startingDirectory;
+    return nil;
+#endif
 }
 
 - (IBAction)openGame:sender
 {
     NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
-    BOOL selectedSomething = NO;
-    int panelResult;
-    NSString* startingDirectory;
-    
+
     /* Get where we think the save files are */
-    startingDirectory = [get_data_directory() stringByAppendingPathComponent:@"/save/"];
-    
-    /* Get what we think the default save file name is. Deafult to the empty string. */
-    NSString *savefileName = [[NSUserDefaults angbandDefaults] stringForKey:@"SaveFile"];
-    if (! savefileName) savefileName = @"";
-    
-    /* Set up an open panel */
-    NSOpenPanel* panel = [NSOpenPanel openPanel];
-    [panel setCanChooseFiles:YES];
-    [panel setCanChooseDirectories:NO];
-    [panel setResolvesAliases:YES];
-    [panel setAllowsMultipleSelection:YES];
-    [panel setTreatsFilePackagesAsDirectories:YES];
-    
-    /* Run it */
-    panelResult = [panel runModalForDirectory:startingDirectory file:savefileName types:nil];
-    if (panelResult == NSOKButton)
+    NSString *startingDirectory =
+        [get_data_directory() stringByAppendingPathComponent:@"/save/"];
+
+    NSString *chosen = angband_open_file_dialog(startingDirectory);
+    if (chosen)
     {
-        NSArray* filenames = [panel filenames];
-        if ([filenames count] > 0)
+        BOOL ok = [chosen getFileSystemRepresentation:savefile
+                                            maxLength:sizeof savefile];
+        if (ok)
         {
-            selectedSomething = [[filenames objectAtIndex:0] getFileSystemRepresentation:savefile maxLength:sizeof savefile];
+            /* Remember this so we can select it by default next time */
+            record_current_savefile();
+
+            /* Game is in progress */
+            game_in_progress = TRUE;
+            new_game = FALSE;
         }
     }
-    
-    if (selectedSomething)
-    {
-        
-        /* Remember this so we can select it by default next time */
-        record_current_savefile();
-        
-        /* Game is in progress */
-        game_in_progress = TRUE;
-        new_game = FALSE;
-    }
-    
+
     [pool drain];
 }
 
 - (IBAction)saveGame:sender
 {
-    /* Hack -- Forget messages */
-    msg_flag = FALSE;
-    
     /* Save the game */
     do_cmd_save_game(FALSE);
     
@@ -3064,7 +3121,8 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     {
         return ! game_in_progress;
     }
-    else if (sel == @selector(editFont:))
+    else if (sel == @selector(editFont:) ||
+             sel == @selector(showPreferencesPanel:))
     {
         return YES;
     }
@@ -3112,7 +3170,7 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     NSMenu *windowsMenu = [[NSApplication sharedApplication] windowsMenu];
     [windowsMenu addItem: [NSMenuItem separatorItem]];
 
-    NSMenuItem *angbandItem = [[NSMenuItem alloc] initWithTitle: @"PosChengband" action: @selector(selectWindow:) keyEquivalent: @"0"];
+    NSMenuItem *angbandItem = [[NSMenuItem alloc] initWithTitle: @"FrogComposband" action: @selector(selectWindow:) keyEquivalent: @"0"];
     [angbandItem setTarget: self];
     [angbandItem setTag: AngbandWindowMenuItemTagBase];
     [windowsMenu addItem: angbandItem];
@@ -3141,7 +3199,7 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     NSInteger windowNumber = [((AngbandContext *)angband_term[0]->data)->primaryWindow windowNumber];
 
     // send a \ to bypass keymaps
-    NSEvent *escape = [NSEvent keyEventWithType: NSKeyDown
+    NSEvent *escape = [NSEvent keyEventWithType: NSEventTypeKeyDown
                                        location: NSZeroPoint
                                   modifierFlags: 0
                                       timestamp: 0.0
@@ -3154,7 +3212,7 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     [[NSApplication sharedApplication] postEvent: escape atStart: NO];
 
     // send the actual command (from the original command set)
-    NSEvent *keyDown = [NSEvent keyEventWithType: NSKeyDown
+    NSEvent *keyDown = [NSEvent keyEventWithType: NSEventTypeKeyDown
                                         location: NSZeroPoint
                                    modifierFlags: 0
                                        timestamp: 0.0
@@ -3181,9 +3239,9 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     {
         BOOL useShiftModifier = [[item valueForKey: @"ShiftModifier"] boolValue];
         BOOL useOptionModifier = [[item valueForKey: @"OptionModifier"] boolValue];
-        NSUInteger keyModifiers = NSCommandKeyMask;
-        keyModifiers |= (useShiftModifier) ? NSShiftKeyMask : 0;
-        keyModifiers |= (useOptionModifier) ? NSAlternateKeyMask : 0;
+        NSUInteger keyModifiers = NSEventModifierFlagCommand;
+        keyModifiers |= (useShiftModifier) ? NSEventModifierFlagShift : 0;
+        keyModifiers |= (useOptionModifier) ? NSEventModifierFlagOption : 0;
 
         NSString *title = [item valueForKey: @"Title"];
         NSString *key = [item valueForKey: @"KeyEquivalent"];
@@ -3213,6 +3271,39 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
 
     [self prepareWindowsMenu];
     [self prepareCommandMenu];
+    [self preparePreferencesMenuItem];
+
+    /* Listen for FPS changes broadcast by AngbandPreferencesWindowController */
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(fpsChangedNotification:)
+               name:@"AngbandFPSChanged"
+             object:nil];
+}
+
+- (void)preparePreferencesMenuItem
+{
+    /* Add "Preferences…" (Cmd-,) to the application menu (first menu in bar).
+     * The NIB already has an Edit > "Edit Font…" item wired to editFont:.
+     * We insert Preferences at the standard macOS position in the app menu. */
+    NSMenu *appMenu = [[[NSApp mainMenu] itemAtIndex:0] submenu];
+    NSMenuItem *prefsItem = [[NSMenuItem alloc]
+        initWithTitle:@"Preferences\u2026"
+               action:@selector(showPreferencesPanel:)
+        keyEquivalent:@","];
+    [prefsItem setTarget:self];
+    /* Insert after "About FrogComposband" separator (typically index 1) */
+    NSInteger insertAt = 1;
+    for (NSInteger i = 0; i < [appMenu numberOfItems]; i++) {
+        if ([[appMenu itemAtIndex:i] isSeparatorItem]) { insertAt = i + 1; break; }
+    }
+    [appMenu insertItem:prefsItem atIndex:insertAt];
+    [prefsItem release];
+}
+
+- (void)fpsChangedNotification:(NSNotification *)note
+{
+    frames_per_second = [(NSNumber *)[note object] intValue];
 }
 
 - (void)applicationDidFinishLaunching:sender
