@@ -43,7 +43,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           codesign --deep --force --options runtime \
-            --sign "Developer ID Application: Tim Robichaux ($APPLE_TEAM_ID)" \
+            --sign "Developer ID Application: TIMOTHY D ROBICHAUX ($APPLE_TEAM_ID)" \
             --entitlements src/cocoa/FrogComposband.entitlements \
             FrogComposband.app
 

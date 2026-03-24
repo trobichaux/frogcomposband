@@ -243,8 +243,10 @@ pip-log.txt
 /src/frogcomposband
 /frogcomposband
 
-# macOS app bundle (build artifact)
+# macOS app bundle and build artifacts
 /*.app/
+/*.dmg
+/*.p12
 /src/tags
 
 # Temporary (cache) files built during run-time
