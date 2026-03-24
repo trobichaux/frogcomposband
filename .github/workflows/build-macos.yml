@@ -59,11 +59,22 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           DMG=$(ls FrogComposband-*-osx.dmg)
-          xcrun notarytool submit "$DMG" \
+          SUBMISSION=$(xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --wait
+            --wait --output-format json)
+          echo "$SUBMISSION"
+          STATUS=$(echo "$SUBMISSION" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+          ID=$(echo "$SUBMISSION" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "Notarization failed with status: $STATUS"
+            xcrun notarytool log "$ID" \
+              --apple-id "$APPLE_ID" \
+              --team-id "$APPLE_TEAM_ID" \
+              --password "$APPLE_APP_PASSWORD"
+            exit 1
+          fi
           xcrun stapler staple "$DMG"
 
       - name: Upload .dmg to release
