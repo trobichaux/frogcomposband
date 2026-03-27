@@ -977,7 +977,7 @@ errr fd_read(int fd, char *buf, huge n)
     while (n >= 16384)
     {
         /* Read a piece */
-        if (_read(fd, buf, 16384) != 16384) return (1);
+        if (read(fd, buf, 16384) != 16384) return (1);
 
         /* Shorten the task */
         buf += 16384;
@@ -1010,7 +1010,7 @@ errr fd_write(int fd, cptr buf, huge n)
     while (n >= 16384)
     {
         /* Write a piece */
-        if (_write(fd, buf, 16384) != 16384) return (1);
+        if (write(fd, buf, 16384) != 16384) return (1);
 
         /* Shorten the task */
         buf += 16384;
