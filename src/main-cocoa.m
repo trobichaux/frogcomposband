@@ -484,7 +484,7 @@ static void record_current_savefile(void);
     NSBundle *bundle = [NSBundle bundleForClass:[AngbandView class]];
     NSString *path = [bundle pathForImageResource:name];
     NSImage *result;
-    if (path) result = [[[NSImage alloc] initByReferencingFile:path] autorelease];
+    if (path) result = [[[NSImage alloc] initWithContentsOfFile:path] autorelease];
     else result = nil;
     return result;
 }
@@ -2414,7 +2414,7 @@ static void load_sounds(void)
                 {
                     
                     /* Load the sound into memory */
-                    sound = [[[NSSound alloc] initWithContentsOfFile:[NSString stringWithUTF8String:path] byReference:YES] autorelease];
+                    sound = [[[NSSound alloc] initWithContentsOfFile:[NSString stringWithUTF8String:path] byReference:NO] autorelease];
                     if (sound) [sound_dict setObject:sound forKey:token_string];
                 }
             }
