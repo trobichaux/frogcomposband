@@ -50,7 +50,7 @@ jobs:
           codesign --verify --deep --strict FrogComposband.app
 
           # Get version from Makefile
-          VERSION=$(grep '^VERSION' src/Makefile.src | head -1 | cut -d= -f2 | tr -d ' ')
+          VERSION=$(grep '^VERSION' src/Makefile.src | head -1 | cut -d= -f2 | tr -d ' \r')
           DMG_NAME="FrogComposband-${VERSION}-osx.dmg"
 
           # Package the already-signed app into a .dmg
