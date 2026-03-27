@@ -101,4 +101,5 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           DMG=$(ls FrogComposband-*-osx.dmg)
-          gh release upload "$TAG_NAME" "$DMG" --clobber
+          gh release create "$TAG_NAME" "$DMG" --title "$TAG_NAME" --notes "macOS arm64 build — signed and notarized." 2>/dev/null \
+            || gh release upload "$TAG_NAME" "$DMG" --clobber
