@@ -47,7 +47,7 @@ jobs:
             --sign "Developer ID Application: TIMOTHY D ROBICHAUX ($APPLE_TEAM_ID)" \
             --entitlements src/cocoa/FrogComposband.entitlements \
             FrogComposband.app
-          codesign --verify --deep --strict FrogComposband.app
+          codesign --verify --deep --strict --verbose=4 FrogComposband.app 2>&1
 
           # Get version from Makefile
           VERSION=$(grep '^VERSION' src/Makefile.src | head -1 | cut -d= -f2 | tr -d ' \r')
