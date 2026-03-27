@@ -2577,8 +2577,10 @@ static void quit_calmly(void)
         /* Save the game */
         do_cmd_save_game(FALSE);
         record_current_savefile();
-        
-        
+
+        /* Clean up floor temp files so init_saved_floors() doesn't warn on next launch */
+        clear_saved_floor_files();
+
         /* Quit */
         quit(NULL);
     }
