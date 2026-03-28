@@ -311,7 +311,7 @@ static void AngbandUpdateWindowVisibility(void)
     // we don't care about the flags themselves; we just want to know if any are set.
     for( int i = 1; i < ANGBAND_TERM_MAX; i++ )
     {
-        AngbandContext *angbandContext = angband_term[i]->data;
+        AngbandContext *angbandContext = (__bridge AngbandContext *)angband_term[i]->data;
 
         if( angbandContext == nil )
         {
@@ -335,7 +335,7 @@ static void AngbandUpdateWindowVisibility(void)
     // make the main window key so that user events go to the right spot
     if (angband_term[0] && angband_term[0]->data)
     {
-        AngbandContext *mainWindow = angband_term[0]->data;
+        AngbandContext *mainWindow = (__bridge AngbandContext *)angband_term[0]->data;
         [mainWindow->primaryWindow makeKeyAndOrderFront: nil];
     }
 }
@@ -484,7 +484,7 @@ static void record_current_savefile(void);
     NSBundle *bundle = [NSBundle bundleForClass:[AngbandView class]];
     NSString *path = [bundle pathForImageResource:name];
     NSImage *result;
-    if (path) result = [[[NSImage alloc] initWithContentsOfFile:path] autorelease];
+    if (path) result = [[NSImage alloc] initWithContentsOfFile:path];
     else result = nil;
     return result;
 }
@@ -534,7 +534,6 @@ static int compare_advances(const void *ap, const void *bp)
     unichar unicharString[GLYPH_COUNT] = {0};
     NSString *allCharsString = [[NSString alloc] initWithBytes:latinString length:sizeof latinString encoding:NSISOLatin1StringEncoding];
     [allCharsString getCharacters:unicharString range:NSMakeRange(0, MIN(GLYPH_COUNT, [allCharsString length]))];
-    [allCharsString autorelease];
     
     // Get glyphs
     memset(glyphArray, 0, sizeof glyphArray);
@@ -795,8 +794,6 @@ static int compare_advances(const void *ap, const void *bp)
 - (void)setSelectionFont:(NSFont*)font adjustTerminal: (BOOL)adjustTerminal
 {
     /* Record the new font */
-    [font retain];
-    [angbandViewFont release];
     angbandViewFont = font;
     
     /* Update our glyph info */
@@ -850,7 +847,6 @@ static int compare_advances(const void *ap, const void *bp)
     
     /* Disassociate ourselves from our angbandViews */
     [angbandViews makeObjectsPerformSelector:@selector(setAngbandContext:) withObject:nil];
-    [angbandViews release];
     angbandViews = nil;
     
     /* Destroy the layer/image */
@@ -858,13 +854,11 @@ static int compare_advances(const void *ap, const void *bp)
     angbandLayer = NULL;
 
     /* Font */
-    [angbandViewFont release];
     angbandViewFont = nil;
     
     /* Window */
     [primaryWindow setDelegate:nil];
     [primaryWindow close];
-    [primaryWindow release];
     primaryWindow = nil;
     
     /* Free overdraw cache. */
@@ -878,7 +872,6 @@ static int compare_advances(const void *ap, const void *bp)
 - (void)dealloc
 {
     [self dispose];
-    [super dealloc];
 }
 
 
@@ -903,7 +896,6 @@ static int compare_advances(const void *ap, const void *bp)
         [alert setInformativeText:@"FrogComposband was unable to find required resources and must quit. Please report a bug on the GitHub issue tracker."];
         [alert addButtonWithTitle:@"Quit"];
         [alert runModal];
-        [alert release];
         exit( 0 );
     }
 
@@ -947,7 +939,7 @@ static int compare_advances(const void *ap, const void *bp)
 /* Entry point for initializing Angband */
 + (void)beginGame
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     
     /* Hooks in some "z-util.c" hooks */
     plog_aux = hook_plog;
@@ -990,7 +982,7 @@ static int compare_advances(const void *ap, const void *bp)
      * even handler as appropriate
      */
         
-    [pool drain];
+    } /* @autoreleasepool */
     
     /* Show the splash/news screen before waiting for menu selection.
      * dungeon.c skips display_news() for "mac" (like "win") so it
@@ -1124,7 +1116,7 @@ static NSMenuItem *superitem(NSMenuItem *self)
         NSUInteger styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable;
 
         // make every window other than the main window closable
-        if( angband_term[0]->data != self )
+        if( (__bridge AngbandContext *)angband_term[0]->data != self )
         {
             styleMask |= NSWindowStyleMaskClosable;
         }
@@ -1140,7 +1132,6 @@ static NSMenuItem *superitem(NSMenuItem *self)
         [angbandView setAngbandContext:self];
         [angbandViews addObject:angbandView];
         [primaryWindow setContentView:angbandView];
-        [angbandView release];
 
         /* We are its delegate */
         [primaryWindow setDelegate:self];
@@ -1258,8 +1249,6 @@ static NSMenuItem *superitem(NSMenuItem *self)
             [mutableTerminals replaceObjectAtIndex: termIndex withObject: mutableTerm];
 
             [[NSUserDefaults standardUserDefaults] setValue: mutableTerminals forKey: AngbandTerminalsDefaultsKey];
-            [mutableTerminals release];
-            [mutableTerm release];
         }
     }
 
@@ -1362,7 +1351,7 @@ static NSMenuItem *superitem(NSMenuItem *self)
 {
     /* Only act on subwindows; the main window closing terminates the app. */
     if ([notification object] != primaryWindow) return;
-    if (self == (AngbandContext *)angband_term[0]->data) return;
+    if (self == (__bridge AngbandContext *)angband_term[0]->data) return;
 
     self.hasSubwindowFlags = NO;
 }
@@ -1479,12 +1468,11 @@ static void record_current_savefile(void)
  */
 static void Term_init_cocoa(term *t)
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     AngbandContext *context = [[AngbandContext alloc] init];
     
     /* Give the term a hard retain on context (for GC) */
-    t->data = (void *)CFRetain(context);
-    [context release];
+    t->data = (__bridge_retained void *)context;
     
     /* Handle graphics */
     t->higher_pict = !! use_graphics;
@@ -1568,7 +1556,7 @@ static void Term_init_cocoa(term *t)
     
     /* Set "mapped" flag */
     t->mapped_flag = true;
-    [pool drain];
+    } /* @autoreleasepool */
 }
 
 
@@ -1578,22 +1566,22 @@ static void Term_init_cocoa(term *t)
  */
 static void Term_nuke_cocoa(term *t)
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     
-    AngbandContext *context = t->data;
+    AngbandContext *context = (__bridge AngbandContext *)t->data;
     if (context)
     {
         /* Tell the context to get rid of its windows, etc. */
         [context dispose];
         
         /* Balance our CFRetain from when we created it */
-        CFRelease(context);
+        CFRelease(t->data);
         
         /* Done with it */
         t->data = NULL;
     }
     
-    [pool drain];
+    } /* @autoreleasepool */
 }
 #if 0
 /* Returns the CGImageRef corresponding to an image with the given name in the resource directory, transferring ownership to the caller */
@@ -1612,15 +1600,13 @@ static CGImageRef create_angband_image(NSString *name)
         if (url)
         {
             NSDictionary *options = [[NSDictionary alloc] initWithObjectsAndKeys:(id)kCFBooleanTrue, kCGImageSourceShouldCache, nil];
-            CGImageSourceRef source = CGImageSourceCreateWithURL((CFURLRef)url, (CFDictionaryRef)options);
+            CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, (__bridge CFDictionaryRef)options);
             if (source)
             {
                 /* We really want the largest image, but in practice there's only going to be one */
-                decodedImage = CGImageSourceCreateImageAtIndex(source, 0, (CFDictionaryRef)options);
+                decodedImage = CGImageSourceCreateImageAtIndex(source, 0, (__bridge CFDictionaryRef)options);
                 CFRelease(source);
             }
-            [options release];
-            [url release];
         }
     }
     
@@ -1666,7 +1652,7 @@ static errr Term_xtra_cocoa_react(void)
     /* Don't actually switch graphics until the game is running */
     if (!initialized || !game_in_progress) return (-1);
 
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     //AngbandContext *angbandContext = Term->data;
 #if 0    
     /* Handle graphics */
@@ -1724,7 +1710,7 @@ static errr Term_xtra_cocoa_react(void)
         }
     }
 #endif    
-    [pool drain];
+    } /* @autoreleasepool */
     
     /* Success */
     return (0);
@@ -1736,10 +1722,9 @@ static errr Term_xtra_cocoa_react(void)
  */
 static errr Term_xtra_cocoa(int n, int v)
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    AngbandContext* angbandContext = Term->data;
-    
     errr result = 0;
+    @autoreleasepool {
+    AngbandContext* angbandContext = (__bridge AngbandContext *)Term->data;
     
     /* Analyze */
     switch (n)
@@ -1853,7 +1838,7 @@ static errr Term_xtra_cocoa(int n, int v)
             break;
     }
     
-    [pool drain];
+    } /* @autoreleasepool */
     
     /* Oops */
     return result;
@@ -1861,8 +1846,8 @@ static errr Term_xtra_cocoa(int n, int v)
 
 static errr Term_curs_cocoa(int x, int y)
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    AngbandContext *angbandContext = Term->data;
+    @autoreleasepool {
+    AngbandContext *angbandContext = (__bridge AngbandContext *)Term->data;
     
     /* Get the tile */
     NSRect rect = [angbandContext rectInImageForTileAtX:x Y:y];
@@ -1883,7 +1868,7 @@ static errr Term_curs_cocoa(int x, int y)
     [angbandContext setNeedsDisplayInBaseRect:redisplayRect];
     
     /* Success */
-    [pool drain];
+    } /* @autoreleasepool */
     return 0;
 }
 
@@ -1894,8 +1879,8 @@ static errr Term_curs_cocoa(int x, int y)
  */
 static errr Term_wipe_cocoa(int x, int y, int n)
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    AngbandContext *angbandContext = Term->data;
+    @autoreleasepool {
+    AngbandContext *angbandContext = (__bridge AngbandContext *)Term->data;
     
     /* Clear only the wiped region from the overdraw cache.
      * Clearing the entire cache here causes adjacent drawn characters to be
@@ -1919,7 +1904,7 @@ static errr Term_wipe_cocoa(int x, int y, int n)
     [angbandContext unlockFocus];    
     [angbandContext setNeedsDisplayInBaseRect:rect];
     
-    [pool drain];
+    } /* @autoreleasepool */
     
     /* Success */
     return (0);
@@ -1943,8 +1928,8 @@ static errr Term_pict_cocoa(int x, int y, int n, const int *ap,
     /* Paranoia: Bail if we don't have a current graphics mode */
     if (! current_graphics_mode) return -1;
     
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    AngbandContext* angbandContext = Term->data;
+    @autoreleasepool {
+    AngbandContext* angbandContext = (__bridge AngbandContext *)Term->data;
 
     /* Indicate that we have a picture here (and hence this should not be overdrawn by Term_text_cocoa) */
     angbandContext->charOverdrawCache[y * angbandContext->cols + x] = NO_OVERDRAW;
@@ -2019,7 +2004,7 @@ static errr Term_pict_cocoa(int x, int y, int n, const int *ap,
     [angbandContext unlockFocus];
     [angbandContext setNeedsDisplayInBaseRect:redisplayRect];
     
-    [pool drain];
+    } /* @autoreleasepool */
     
     /* Success */
     return (0);
@@ -2032,7 +2017,7 @@ static errr Term_pict_cocoa(int x, int y, int n, const int *ap,
  */
 static errr Term_text_cocoa(int x, int y, int n, byte_hack a, cptr cp)
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
 
     /* Subpixel rendering looks really nice!  Unfortunately, drawing a string like this:
      .@
@@ -2044,7 +2029,7 @@ static errr Term_text_cocoa(int x, int y, int n, byte_hack a, cptr cp)
      */
     
     NSRect redisplayRect = NSZeroRect;
-    AngbandContext* angbandContext = Term->data;
+    AngbandContext* angbandContext = (__bridge AngbandContext *)Term->data;
     
     /* record our data in our cache */
     int start = y * angbandContext->cols + x;
@@ -2128,7 +2113,7 @@ static errr Term_text_cocoa(int x, int y, int n, byte_hack a, cptr cp)
     [angbandContext unlockFocus];    
     [angbandContext setNeedsDisplayInBaseRect:redisplayRect];
     
-    [pool drain];
+    } /* @autoreleasepool */
     
     /* Success */
     return (0);
@@ -2271,8 +2256,6 @@ static void load_prefs()
                               defaultTerms, AngbandTerminalsDefaultsKey,
                               nil];
     [defs registerDefaults:defaults];
-    [defaults release];
-    [defaultTerms release];
     
     /* preferred graphics mode */
     graf_mode_req = [defs integerForKey:@"GraphicsID"];
@@ -2284,8 +2267,8 @@ static void load_prefs()
     frames_per_second = [[NSUserDefaults angbandDefaults] integerForKey:@"FramesPerSecond"];
     
     /* font */
-    default_font = [[NSFont fontWithName:[defs valueForKey:@"FontName-0"] size:[defs floatForKey:@"FontSize-0"]] retain];
-    if (! default_font) default_font = [[NSFont fontWithName:@"Menlo" size:13.] retain];
+    default_font = [NSFont fontWithName:[defs valueForKey:@"FontName-0"] size:[defs floatForKey:@"FontSize-0"]];
+    if (! default_font) default_font = [NSFont fontWithName:@"Menlo" size:13.];
 }
 
 /* Arbitary limit on number of possible samples per event */
@@ -2333,8 +2316,7 @@ static void load_sounds(void)
 	}
 	
 	/* Instantiate an autorelease pool for use by NSSound */
-	NSAutoreleasePool *autorelease_pool;
-	autorelease_pool = [[NSAutoreleasePool alloc] init];
+	@autoreleasepool {
     
     /* Use a dictionary to unique sounds, so we can share NSSounds across multiple events */
     NSMutableDictionary *sound_dict = [NSMutableDictionary dictionary];
@@ -2414,7 +2396,7 @@ static void load_sounds(void)
                 {
                     
                     /* Load the sound into memory */
-                    sound = [[[NSSound alloc] initWithContentsOfFile:[NSString stringWithUTF8String:path] byReference:NO] autorelease];
+                    sound = [[NSSound alloc] initWithContentsOfFile:[NSString stringWithUTF8String:path] byReference:NO];
                     if (sound) [sound_dict setObject:sound forKey:token_string];
                 }
             }
@@ -2422,7 +2404,7 @@ static void load_sounds(void)
             /* Store it if we loaded it */
             if (sound)
             {
-                samples[event].sound[num] = [sound retain];
+                samples[event].sound[num] = sound;
                 
                 /* Imcrement the sample count */
                 samples[event].num++;
@@ -2452,7 +2434,7 @@ static void load_sounds(void)
 	}
     
 	/* Release the autorelease pool */
-	[autorelease_pool release];
+	} /* @autoreleasepool */
     
 	/* Close the file */
 	file_close(fff);
@@ -2483,8 +2465,7 @@ static void play_sound(int event)
     if (!samples[event].num) return;
     
     /* Instantiate an autorelease pool for use by NSSound */
-    NSAutoreleasePool *autorelease_pool;
-    autorelease_pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     
     /* Choose a random event */
     int s = randint0(samples[event].num);
@@ -2496,8 +2477,7 @@ static void play_sound(int event)
     /* Play the sound */
     [samples[event].sound[s] play];
     
-    /* Release the autorelease pool */
-    [autorelease_pool drain];
+    } /* @autoreleasepool */
 }
 #endif
 /*
@@ -2531,10 +2511,10 @@ static errr get_cmd_init(void)
         Term_fresh();
         
         while (cmd.command == CMD_NULL) {
-            NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+            @autoreleasepool {
             NSEvent *event = [NSApp nextEventMatchingMask:NSAnyEventMask untilDate:[NSDate distantFuture] inMode:NSDefaultRunLoopMode dequeue:YES];
             if (event) [NSApp sendEvent:event];
-            [pool drain];        
+            } /* @autoreleasepool */
         }
     }
     
@@ -2757,7 +2737,7 @@ static BOOL send_event(NSEvent *event)
             AngbandContext *angbandContext =
                 [[[event window] contentView] angbandContext];
             AngbandContext *mainAngbandContext =
-                angband_term[0]->data;
+                (__bridge AngbandContext *)angband_term[0]->data;
 
             if (mainAngbandContext->primaryWindow &&
                 [[event window] windowNumber] ==
@@ -2815,8 +2795,7 @@ static BOOL send_event(NSEvent *event)
  */
 static BOOL check_events(int wait)
 { 
-    
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     
     /* Handles the quit_when_ready flag */
     if (quit_when_ready) quit_calmly();
@@ -2831,25 +2810,22 @@ static BOOL check_events(int wait)
         {
             /* send escape events until we quit */
             Term_keypress(0x1B);
-            [pool drain];
             return false;
         }
         else {
             event = [NSApp nextEventMatchingMask:-1 untilDate:endDate inMode:NSDefaultRunLoopMode dequeue:YES];
             if (! event)
             {
-                [pool drain];
                 return FALSE;
             }
             if (send_event(event)) break;
         }
     }
     
-    [pool drain];
-    
     /* Something happened */
     return YES;
     
+    } /* @autoreleasepool */
 }
 
 /*
@@ -2865,7 +2841,6 @@ static void hook_plog(const char * str)
         [alert setInformativeText:string];
         [alert addButtonWithTitle:@"OK"];
         [alert runModal];
-        [alert release];
     }
 }
 
@@ -2882,7 +2857,7 @@ static void hook_quit(const char * str)
 /* Set HFS file type and creator codes on a path */
 static void cocoa_file_open_hook(const char *path, file_type ftype)
 {
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
     NSString *pathString = [NSString stringWithUTF8String:path];
     if (pathString)
     {   
@@ -2895,7 +2870,7 @@ static void cocoa_file_open_hook(const char *path, file_type ftype)
         NSDictionary *attrs = [NSDictionary dictionaryWithObjectsAndKeys:[NSNumber numberWithUnsignedLong:mac_type], NSFileHFSTypeCode, [NSNumber numberWithUnsignedLong:ANGBAND_CREATOR], NSFileHFSCreatorCode, nil];
         [[NSFileManager defaultManager] setAttributes:attrs ofItemAtPath:pathString error:NULL];
     }
-    [pool drain];
+    } /* @autoreleasepool */
 }
 
 /* A platform-native file save dialogue box, e.g. for saving character dumps */
@@ -2925,8 +2900,8 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     NSDictionary *_commandMenuTagMap;
 }
 
-@property (nonatomic, retain) IBOutlet NSMenu *commandMenu;
-@property (nonatomic, retain) NSDictionary *commandMenuTagMap;
+@property (nonatomic, strong) IBOutlet NSMenu *commandMenu;
+@property (nonatomic, strong) NSDictionary *commandMenuTagMap;
 
 - (IBAction)newGame:sender;
 - (IBAction)editFont:(id)sender;
@@ -2956,8 +2931,6 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
 
     /* Update default_font if this is the primary terminal */
     if (termIdx == 0) {
-        [newFont retain];
-        [default_font release];
         default_font = newFont;
     }
 
@@ -2970,7 +2943,7 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     [defs synchronize];
 
     /* Apply to the context (resizes terminal to fit) */
-    AngbandContext *ctx = (AngbandContext *)angband_term[termIdx]->data;
+    AngbandContext *ctx = (__bridge AngbandContext *)angband_term[termIdx]->data;
     [(id)ctx setSelectionFont:newFont adjustTerminal:YES];
 
     /* Keep the Preferences panel in sync */
@@ -2987,15 +2960,15 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     NSWindow *parentWindow = nil;
     int mainTerm = 0;
     for (int i = 0; i < ANGBAND_TERM_MAX; i++) {
-        if ([(id)angband_term[i]->data isMainWindow]) {
-            parentWindow = ((AngbandContext *)angband_term[i]->data)->primaryWindow;
+        if ([(__bridge id)angband_term[i]->data isMainWindow]) {
+            parentWindow = ((__bridge AngbandContext *)angband_term[i]->data)->primaryWindow;
             mainTerm = i;
             break;
         }
     }
     if (!parentWindow) return;
 
-    NSFont *current = [(id)angband_term[mainTerm]->data selectionFont]
+    NSFont *current = [(__bridge id)angband_term[mainTerm]->data selectionFont]
                       ?: default_font;
     const int capturedTerm = mainTerm;
 
@@ -3019,7 +2992,7 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     }];
     [prefs setResizeHandler:^(NSInteger cols, NSInteger rows) {
         /* Resize the main terminal to the requested column × row count */
-        AngbandContext *ctx = (AngbandContext *)angband_term[0]->data;
+        AngbandContext *ctx = (__bridge AngbandContext *)angband_term[0]->data;
         NSSize tile = ctx->tileSize;
         NSSize border = ctx->borderSize;
         NSSize contentSize = NSMakeSize(cols * tile.width  + border.width  * 2.0,
@@ -3064,7 +3037,7 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
 
 - (IBAction)openGame:sender
 {
-    NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+    @autoreleasepool {
 
     /* Get where we think the save files are */
     NSString *startingDirectory =
@@ -3086,7 +3059,7 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
         }
     }
 
-    [pool drain];
+    } /* @autoreleasepool */
 }
 
 - (IBAction)saveGame:sender
@@ -3162,7 +3135,7 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
 - (IBAction)selectWindow: (id)sender
 {
     NSInteger subwindowNumber = [(NSMenuItem *)sender tag] - AngbandWindowMenuItemTagBase;
-    AngbandContext *context = angband_term[subwindowNumber]->data;
+    AngbandContext *context = (__bridge AngbandContext *)angband_term[subwindowNumber]->data;
     [context->primaryWindow makeKeyAndOrderFront: self];
 }
 
@@ -3176,7 +3149,6 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
     [angbandItem setTarget: self];
     [angbandItem setTag: AngbandWindowMenuItemTagBase];
     [windowsMenu addItem: angbandItem];
-    [angbandItem release];
 
     // add items for the additional term windows
     for( NSInteger i = 1; i < ANGBAND_TERM_MAX; i++ )
@@ -3186,7 +3158,6 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
         [windowItem setTarget: self];
         [windowItem setTag: AngbandWindowMenuItemTagBase + i];
         [windowsMenu addItem: windowItem];
-        [windowItem release];
     }
 }
 
@@ -3198,7 +3169,7 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
 {
     NSMenuItem *menuItem = (NSMenuItem *)sender;
     NSString *command = [self.commandMenuTagMap objectForKey: @([menuItem tag])];
-    NSInteger windowNumber = [((AngbandContext *)angband_term[0]->data)->primaryWindow windowNumber];
+    NSInteger windowNumber = [((__bridge AngbandContext *)angband_term[0]->data)->primaryWindow windowNumber];
 
     // send a \ to bypass keymaps
     NSEvent *escape = [NSEvent keyEventWithType: NSEventTypeKeyDown
@@ -3252,19 +3223,14 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
         [menuItem setKeyEquivalentModifierMask: keyModifiers];
         [menuItem setTag: AngbandCommandMenuItemTagBase + tagOffset];
         [self.commandMenu addItem: menuItem];
-        [menuItem release];
 
         NSString *angbandCommand = [item valueForKey: @"AngbandCommand"];
         [angbandCommands setObject: angbandCommand forKey: @([menuItem tag])];
         tagOffset++;
     }
 
-    [commandMenuItems release];
-
     NSDictionary *safeCommands = [[NSDictionary alloc] initWithDictionary: angbandCommands];
     self.commandMenuTagMap = safeCommands;
-    [safeCommands release];
-    [angbandCommands release];
 }
 
 - (void)awakeFromNib
@@ -3300,8 +3266,8 @@ static NSString *angband_open_file_dialog(NSString *startingDirectory)
         if ([[appMenu itemAtIndex:i] isSeparatorItem]) { insertAt = i + 1; break; }
     }
     [appMenu insertItem:prefsItem atIndex:insertAt];
-    [prefsItem release];
 }
+
 
 - (void)fpsChangedNotification:(NSNotification *)note
 {

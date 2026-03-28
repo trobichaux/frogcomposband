@@ -79,7 +79,6 @@ static const NSInteger kNumPresets = 3;
                       defer:YES];
     [win setTitle:@"FrogComposband Preferences"];
     [win center];
-    [win autorelease];
 
     self = [super initWithWindow:win];
     if (!self) return nil;
@@ -92,38 +91,24 @@ static const NSInteger kNumPresets = 3;
     if (fsize < 6.0) fsize = 13.0;
     _displayedFont = [NSFont fontWithName:(fname ?: @"Menlo") size:fsize];
     if (!_displayedFont) _displayedFont = [NSFont fontWithName:@"Menlo" size:13.0];
-    [_displayedFont retain];
 
     [self buildUI];
     return self;
-}
-
-- (void)dealloc {
-    [_fontHandler release];
-    [_resizeHandler release];
-    [_displayedFont release];
-    [super dealloc];
 }
 
 /* ------------------------------------------------------------------ */
 #pragma mark Callback setters
 
 - (void)setFontChangeHandler:(AngbandFontChangeBlock)handler {
-    AngbandFontChangeBlock old = _fontHandler;
     _fontHandler = [handler copy];
-    [old release];
 }
 
 - (void)setResizeHandler:(AngbandResizeBlock)handler {
-    AngbandResizeBlock old = _resizeHandler;
     _resizeHandler = [handler copy];
-    [old release];
 }
 
 - (void)setDisplayedFont:(NSFont *)font {
     if (!font) return;
-    [font retain];
-    [_displayedFont release];
     _displayedFont = font;
     [self refreshFontLabel];
 }
@@ -148,7 +133,6 @@ static const NSInteger kNumPresets = 3;
         initWithFrame:NSInsetRect([root bounds], 8, 8)];
     tabs.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [root addSubview:tabs];
-    [tabs release];
 
     NSTabViewItem *fontItem    = [self buildFontTab];
     NSTabViewItem *displayItem = [self buildDisplayTab];
@@ -160,10 +144,10 @@ static const NSInteger kNumPresets = 3;
 
 /* ---- Font tab ---- */
 - (NSTabViewItem *)buildFontTab {
-    NSTabViewItem *item = [[[NSTabViewItem alloc] init] autorelease];
+    NSTabViewItem *item = [[NSTabViewItem alloc] init];
     [item setLabel:@"Font"];
 
-    NSView *v = [[[NSView alloc] initWithFrame:NSMakeRect(0,0,380,220)] autorelease];
+    NSView *v = [[NSView alloc] initWithFrame:NSMakeRect(0,0,380,220)];
 
     /* Current font name display */
     NSTextField *label = [[NSTextField alloc]
@@ -175,7 +159,6 @@ static const NSInteger kNumPresets = 3;
     label.font = [NSFont systemFontOfSize:13.0];
     _fontNameLabel = label;
     [v addSubview:label];
-    [label release];
     [self refreshFontLabel];
 
     /* "Choose Font…" button */
@@ -187,7 +170,6 @@ static const NSInteger kNumPresets = 3;
     choose.action = @selector(chooseFontPressed:);
     _chooseFontButton = choose;
     [v addSubview:choose];
-    [choose release];
 
     /* Explanatory note */
     NSTextField *note = [[NSTextField alloc]
@@ -201,7 +183,6 @@ static const NSInteger kNumPresets = 3;
     note.font = [NSFont systemFontOfSize:11.0];
     note.textColor = [NSColor secondaryLabelColor];
     [v addSubview:note];
-    [note release];
 
     [item setView:v];
     return item;
@@ -209,10 +190,10 @@ static const NSInteger kNumPresets = 3;
 
 /* ---- Display tab ---- */
 - (NSTabViewItem *)buildDisplayTab {
-    NSTabViewItem *item = [[[NSTabViewItem alloc] init] autorelease];
+    NSTabViewItem *item = [[NSTabViewItem alloc] init];
     [item setLabel:@"Display"];
 
-    NSView *v = [[[NSView alloc] initWithFrame:NSMakeRect(0,0,380,220)] autorelease];
+    NSView *v = [[NSView alloc] initWithFrame:NSMakeRect(0,0,380,220)];
     const CGFloat pad = 16.0;
 
     /* --- Size presets --- */
@@ -225,7 +206,6 @@ static const NSInteger kNumPresets = 3;
     sizeLabel.selectable = NO;
     sizeLabel.font = [NSFont boldSystemFontOfSize:12.0];
     [v addSubview:sizeLabel];
-    [sizeLabel release];
 
     _sizeControl = [[NSSegmentedControl alloc]
         initWithFrame:NSMakeRect(pad, 130, 340, 30)];
@@ -248,7 +228,6 @@ static const NSInteger kNumPresets = 3;
     sizeNote.font = [NSFont systemFontOfSize:11.0];
     sizeNote.textColor = [NSColor secondaryLabelColor];
     [v addSubview:sizeNote];
-    [sizeNote release];
 
     /* --- FPS --- */
     NSTextField *fpsLabel2 = [[NSTextField alloc]
@@ -260,7 +239,6 @@ static const NSInteger kNumPresets = 3;
     fpsLabel2.selectable = NO;
     fpsLabel2.font = [NSFont boldSystemFontOfSize:12.0];
     [v addSubview:fpsLabel2];
-    [fpsLabel2 release];
 
     NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
     NSInteger fps = [defs integerForKey:kFPSKey];
@@ -290,10 +268,10 @@ static const NSInteger kNumPresets = 3;
 
 /* ---- Sound tab ---- */
 - (NSTabViewItem *)buildSoundTab {
-    NSTabViewItem *item = [[[NSTabViewItem alloc] init] autorelease];
+    NSTabViewItem *item = [[NSTabViewItem alloc] init];
     [item setLabel:@"Sound"];
 
-    NSView *v = [[[NSView alloc] initWithFrame:NSMakeRect(0,0,380,220)] autorelease];
+    NSView *v = [[NSView alloc] initWithFrame:NSMakeRect(0,0,380,220)];
 
     NSUserDefaults *defs = [NSUserDefaults standardUserDefaults];
     BOOL soundOn = [defs boolForKey:kSoundKey];
@@ -318,7 +296,6 @@ static const NSInteger kNumPresets = 3;
     soundNote.font = [NSFont systemFontOfSize:11.0];
     soundNote.textColor = [NSColor secondaryLabelColor];
     [v addSubview:soundNote];
-    [soundNote release];
 
     [item setView:v];
     return item;

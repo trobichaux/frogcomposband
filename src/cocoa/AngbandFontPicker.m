@@ -27,11 +27,6 @@ static NSString * const kPreviewString =
 
 @synthesize previewFont = _font;
 
-- (void)dealloc {
-    [_font release];
-    [super dealloc];
-}
-
 - (void)drawRect:(NSRect)dirtyRect {
     /* Black background */
     [[NSColor blackColor] set];
@@ -41,21 +36,18 @@ static NSString * const kPreviewString =
 
     NSDictionary *attrs = @{
         NSFontAttributeName            : _font,
-        NSForegroundColorAttributeName : [NSColor colorWithCalibratedRed:0.8
-                                                                   green:0.8
-                                                                    blue:0.8
-                                                                   alpha:1.0]
+        NSForegroundColorAttributeName : [NSColor colorWithSRGBRed:0.8
+                                                             green:0.8
+                                                              blue:0.8
+                                                             alpha:1.0]
     };
     NSAttributedString *str = [[NSAttributedString alloc]
         initWithString:kPreviewString attributes:attrs];
     NSRect textRect = NSInsetRect(self.bounds, 6.0, 4.0);
     [str drawInRect:textRect];
-    [str release];
 }
 
 - (void)setPreviewFont:(NSFont *)font {
-    [font retain];
-    [_font release];
     _font = font;
     [self setNeedsDisplay:YES];
 }
@@ -127,13 +119,6 @@ static NSArray *BuildMonoFamilyList(void) {
 
 @synthesize selectedFont = _selectedFont;
 
-- (void)dealloc {
-    [_monoFamilies release];
-    [_selectedFont release];
-    [_completionHandler release];
-    [super dealloc];
-}
-
 /* ----------------------------------------------------------
  * Public entry point
  * ---------------------------------------------------------- */
@@ -146,7 +131,6 @@ static NSArray *BuildMonoFamilyList(void) {
                                      completionHandler:handler];
     [parentWindow beginSheet:[picker window]
            completionHandler:^(NSModalResponse __unused r) {
-        [picker release];
     }];
 }
 
@@ -164,17 +148,16 @@ static NSArray *BuildMonoFamilyList(void) {
                     backing:NSBackingStoreBuffered
                       defer:YES];
     [panel setTitle:@"Choose Font"];
-    [panel autorelease];
 
     self = [super initWithWindow:panel];
     if (!self) return nil;
 
     _completionHandler = [handler copy];
-    _monoFamilies = [BuildMonoFamilyList() retain];
+    _monoFamilies = BuildMonoFamilyList();
 
     /* Determine initial selection */
     NSFont *startFont = initialFont ? initialFont : [NSFont fontWithName:@"Menlo" size:13.0];
-    _selectedFont = [startFont retain];
+    _selectedFont = startFont;
 
     [self buildUI];
     [self selectInitialFont:startFont];
@@ -203,14 +186,12 @@ static NSArray *BuildMonoFamilyList(void) {
     col.title = @"Font";
     col.width = 200;
     [_fontTable addTableColumn:col];
-    [col release];
     _fontTable.headerView = nil;
     _fontTable.dataSource = self;
     _fontTable.delegate   = self;
     _fontTable.allowsMultipleSelection = NO;
     scroll.documentView = _fontTable;
     [root addSubview:scroll];
-    [scroll release];
 
     /* ---- Size field + stepper (below list) ---- */
     NSTextField *sizeLabel = [[NSTextField alloc]
@@ -221,7 +202,6 @@ static NSArray *BuildMonoFamilyList(void) {
     sizeLabel.editable = NO;
     sizeLabel.selectable = NO;
     [root addSubview:sizeLabel];
-    [sizeLabel release];
 
     _sizeField = [[NSTextField alloc] initWithFrame:NSMakeRect(pad + 55, 52, 60, 22)];
     _sizeField.doubleValue = [_selectedFont pointSize];
@@ -247,7 +227,6 @@ static NSArray *BuildMonoFamilyList(void) {
     previewLabel.editable = NO;
     previewLabel.selectable = NO;
     [root addSubview:previewLabel];
-    [previewLabel release];
 
     AngbandFontPreviewView *preview = [[AngbandFontPreviewView alloc]
         initWithFrame:NSMakeRect(244, 80, W - 244 - pad, H - 110)];
@@ -255,7 +234,6 @@ static NSArray *BuildMonoFamilyList(void) {
     preview.autoresizingMask = NSViewHeightSizable | NSViewWidthSizable;
     _previewView = preview;
     [root addSubview:preview];
-    [preview release];
 
     /* ---- Buttons ---- */
     NSButton *cancel = [[NSButton alloc]
@@ -266,7 +244,6 @@ static NSArray *BuildMonoFamilyList(void) {
     cancel.target = self;
     cancel.action = @selector(cancelPressed:);
     [root addSubview:cancel];
-    [cancel release];
 
     NSButton *ok = [[NSButton alloc]
         initWithFrame:NSMakeRect(W - 90, 12, 80, 32)];
@@ -276,7 +253,6 @@ static NSArray *BuildMonoFamilyList(void) {
     ok.target = self;
     ok.action = @selector(okPressed:);
     [root addSubview:ok];
-    [ok release];
 }
 
 /* ----------------------------------------------------------
@@ -321,8 +297,8 @@ objectValueForTableColumn:(NSTableColumn * __unused)col
 {
     NSTableCellView *cell = [tv makeViewWithIdentifier:@"FontCell" owner:self];
     if (!cell) {
-        cell = [[[NSTableCellView alloc] initWithFrame:NSMakeRect(0,0,200,18)] autorelease];
-        NSTextField *tf = [[[NSTextField alloc] initWithFrame:cell.bounds] autorelease];
+        cell = [[NSTableCellView alloc] initWithFrame:NSMakeRect(0,0,200,18)];
+        NSTextField *tf = [[NSTextField alloc] initWithFrame:cell.bounds];
         tf.bordered = NO;
         tf.drawsBackground = NO;
         tf.editable = NO;
@@ -381,8 +357,8 @@ objectValueForTableColumn:(NSTableColumn * __unused)col
 - (void)okPressed:(id __unused)sender {
     NSWindow *sheet = [self window];
     NSWindow *parent = [sheet sheetParent];
-    void (^handler)(NSFont *) = [[_completionHandler retain] autorelease];
-    NSFont *chosen = [[_selectedFont retain] autorelease];
+    void (^handler)(NSFont *) = _completionHandler;
+    NSFont *chosen = _selectedFont;
     [parent endSheet:sheet];
     if (handler) handler(chosen);
 }
@@ -390,7 +366,7 @@ objectValueForTableColumn:(NSTableColumn * __unused)col
 - (void)cancelPressed:(id __unused)sender {
     NSWindow *sheet = [self window];
     NSWindow *parent = [sheet sheetParent];
-    void (^handler)(NSFont *) = [[_completionHandler retain] autorelease];
+    void (^handler)(NSFont *) = _completionHandler;
     [parent endSheet:sheet];
     if (handler) handler(nil);
 }

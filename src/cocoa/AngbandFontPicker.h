@@ -40,7 +40,7 @@
              completionHandler:(void (^)(NSFont *chosen))handler;
 
 /* The font currently shown in the picker (updated live as the user navigates). */
-@property (nonatomic, retain) NSFont *selectedFont;
+@property (nonatomic, strong) NSFont *selectedFont;
 
 @end
 
