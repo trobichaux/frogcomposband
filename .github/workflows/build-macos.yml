@@ -6,6 +6,12 @@ on:
     tags: ['v*']
   pull_request:
     branches: [master]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to publish, for example v7.1.salmiak-macos-r8
+        required: true
+        type: string
 
 jobs:
   build:
@@ -17,12 +23,34 @@ jobs:
       - name: Install Xcode Command Line Tools
         run: xcode-select --install 2>/dev/null || true
 
+      - name: Determine release metadata
+        id: meta
+        run: |
+          VERSION=$(grep '^VERSION' src/Makefile.src | head -1 | cut -d= -f2 | tr -d ' \r')
+          DMG_NAME="FrogComposband-${VERSION}-osx.dmg"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ github.event.inputs.release_tag }}"
+            RELEASE_MODE=true
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+            RELEASE_MODE=true
+          else
+            TAG_NAME=""
+            RELEASE_MODE=false
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=$DMG_NAME" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_mode=$RELEASE_MODE" >> "$GITHUB_OUTPUT"
+
       - name: Build app bundle
         run: cd src && make -f Makefile.osx
 
       # Sign and notarize only on tag pushes (releases), not PRs or branch pushes
       - name: Import Developer ID certificate
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.meta.outputs.release_mode == 'true'
         env:
           APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -38,20 +66,22 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN_PATH"
 
       - name: Sign and package .dmg
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.meta.outputs.release_mode == 'true'
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
+          SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application: TIMOTHY D ROBICHAUX ($APPLE_TEAM_ID)}"
+
           # Sign the app (must happen before packaging into .dmg)
           codesign --deep --force --options runtime \
-            --sign "Developer ID Application: TIMOTHY D ROBICHAUX ($APPLE_TEAM_ID)" \
+            --sign "$SIGNING_IDENTITY" \
             --entitlements src/cocoa/FrogComposband.entitlements \
             FrogComposband.app
           codesign --verify --deep --strict --verbose=4 FrogComposband.app 2>&1
 
-          # Get version from Makefile
-          VERSION=$(grep '^VERSION' src/Makefile.src | head -1 | cut -d= -f2 | tr -d ' \r')
-          DMG_NAME="FrogComposband-${VERSION}-osx.dmg"
+          VERSION="${{ steps.meta.outputs.version }}"
+          DMG_NAME="${{ steps.meta.outputs.dmg_name }}"
 
           # Package the already-signed app into a .dmg
           mkdir -p disttemp/Docs
@@ -65,17 +95,17 @@ jobs:
 
           # Sign the .dmg itself (required for notarization)
           codesign --force \
-            --sign "Developer ID Application: TIMOTHY D ROBICHAUX ($APPLE_TEAM_ID)" \
+            --sign "$SIGNING_IDENTITY" \
             "$DMG_NAME"
 
       - name: Notarize .dmg
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.meta.outputs.release_mode == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          DMG=$(ls FrogComposband-*-osx.dmg)
+          DMG="${{ steps.meta.outputs.dmg_name }}"
           SUBMISSION=$(xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
@@ -95,11 +125,15 @@ jobs:
           xcrun stapler staple "$DMG"
 
       - name: Upload .dmg to release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.meta.outputs.release_mode == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.ref_name }}
         run: |
-          DMG=$(ls FrogComposband-*-osx.dmg)
-          gh release create "$TAG_NAME" "$DMG" --title "$TAG_NAME" --notes "macOS arm64 build — signed and notarized." 2>/dev/null \
-            || gh release upload "$TAG_NAME" "$DMG" --clobber
+          TAG_NAME="${{ steps.meta.outputs.tag_name }}"
+          DMG="${{ steps.meta.outputs.dmg_name }}"
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "$TAG_NAME" --notes-file RELEASE_NOTES.md
+            gh release upload "$TAG_NAME" "$DMG" --clobber
+          else
+            gh release create "$TAG_NAME" "$DMG" --title "$TAG_NAME" --notes-file RELEASE_NOTES.md
+          fi
