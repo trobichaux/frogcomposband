@@ -129,6 +129,9 @@ static NSArray *BuildMonoFamilyList(void) {
     AngbandFontPicker *picker =
         [[AngbandFontPicker alloc] initWithInitialFont:initialFont
                                      completionHandler:handler];
+    /* Keep picker alive via strong reference (ARC) for the duration of the sheet.
+       It will be cleared in okPressed/cancelPressed after the sheet is closed. */
+    picker.selfReference = picker;
     [parentWindow beginSheet:[picker window]
            completionHandler:^(NSModalResponse __unused r) {
     }];
@@ -361,6 +364,7 @@ objectValueForTableColumn:(NSTableColumn * __unused)col
     NSFont *chosen = _selectedFont;
     [parent endSheet:sheet];
     if (handler) handler(chosen);
+    self.selfReference = nil;  /* Clear strong reference to allow deallocation */
 }
 
 - (void)cancelPressed:(id __unused)sender {
@@ -369,6 +373,7 @@ objectValueForTableColumn:(NSTableColumn * __unused)col
     void (^handler)(NSFont *) = _completionHandler;
     [parent endSheet:sheet];
     if (handler) handler(nil);
+    self.selfReference = nil;  /* Clear strong reference to allow deallocation */
 }
 
 @end

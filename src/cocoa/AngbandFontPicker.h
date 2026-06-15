@@ -33,6 +33,9 @@
     void (^_completionHandler)(NSFont *chosen); /* nil == cancelled */
 }
 
+/* Strong reference to self for ARC to keep this object alive while the sheet is displayed */
+@property (nonatomic, strong) AngbandFontPicker *selfReference;
+
 /* Present the picker as a sheet attached to parentWindow.
  * completionHandler is called with the chosen font, or nil if cancelled. */
 + (void)presentAsSheetOnWindow:(NSWindow *)parentWindow
